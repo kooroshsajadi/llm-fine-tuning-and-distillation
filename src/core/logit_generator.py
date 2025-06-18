@@ -53,7 +53,7 @@ def main():
 
     try:
         loader = ModelLoader(model_name=teacher_model)
-        input_texts = TextPromptDataset("data/synthetic/training_data.txt")
+        input_texts = TextPromptDataset("data/synthetic/prompts_v1.txt")
 
         # Create output directory if it doesn't exist
         output_dir = Path("data/synthetic/v1_t0.7")
