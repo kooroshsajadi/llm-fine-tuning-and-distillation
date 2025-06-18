@@ -9,30 +9,6 @@ from src.data.data_preparation import TextPromptDataset
 import numpy as np
 import hashlib
 
-
-def main():
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s - %(levelname)s - %(message)s')
-
-    teacher_model = "openai-community/gpt2-medium"
-    batch_size = 32  # Adjust based on available GPU memory
-
-    try:
-        loader = ModelLoader(model_name=teacher_model)
-        input_texts = TextPromptDataset("data/synthetic/training_data.txt")
-
-        # Create output directory if it doesn't exist
-        output_dir = Path("data/synthetic/v1_t0.7")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        for batch_idx, batch in enumerate(tqdm(chunked(input_texts, batch_size))):
-            outputs = loader.generate_logits(batch)
-            save_logits(outputs, output_dir, batch_idx)
-
-    except Exception as e:
-        logging.error(f"Logit generation failed: {str(e)}")
-        sys.exit(1)
-
 def save_logits(outputs: dict, output_dir: Path, batch_idx: int):
     """
     Secure output handler with checksum and memory-mapped storage.
@@ -67,6 +43,29 @@ def sha256sum(filename: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b''):
             h.update(chunk)
     return h.hexdigest()
+
+def main():
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    teacher_model = "openai-community/gpt2-medium"
+    batch_size = 32  # Adjust based on available GPU memory
+
+    try:
+        loader = ModelLoader(model_name=teacher_model)
+        input_texts = TextPromptDataset("data/synthetic/training_data.txt")
+
+        # Create output directory if it doesn't exist
+        output_dir = Path("data/synthetic/v1_t0.7")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for batch_idx, batch in enumerate(tqdm(chunked(input_texts, batch_size))):
+            outputs = loader.generate_logits(batch)
+            save_logits(outputs, output_dir, batch_idx)
+
+    except Exception as e:
+        logging.error(f"Logit generation failed: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
