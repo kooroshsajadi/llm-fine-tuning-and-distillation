@@ -1,0 +1,10 @@
+Explain the concept of knowledge distillation in machine learning.
+What are the advantages of using LoRA for fine-tuning large language models?
+Describe the process of synthetic data generation for LLM training.
+How does temperature scaling affect the output distribution of a language model?
+List key cybersecurity considerations when deploying AI models.
+What is the difference between AutoModelForCausalLM and pipeline in Hugging Face?
+Explain the role of adapter layers in parameter-efficient fine-tuning.
+How can memory-mapped arrays optimize logit storage during distillation?
+Describe the benefits of mixed precision training for large models.
+What are common causes of out-of-memory errors in transformer models?
