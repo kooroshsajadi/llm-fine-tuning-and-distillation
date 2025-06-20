@@ -3,3 +3,4 @@ my_model_cache/
 __pycache__/
 *.pyc
 data/
+.vscode/
