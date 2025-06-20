@@ -6,65 +6,65 @@ from more_itertools import chunked
 from tqdm import tqdm
 from src.core.model_loader import ModelLoader
 from src.data.data_preparation import TextPromptDataset
+from src.utils import generate_checksum
 import numpy as np
-import hashlib
 
 def save_logits(outputs: dict, output_dir: Path, batch_idx: int):
     """
-    Secure output handler with checksum and memory-mapped storage.
-    Stores logits and metadata for each batch.
+    Save logits, hidden states, and attention masks with checksums.
+
+    Args:
+        outputs (dict): Model outputs containing logits, hidden_states, and attention_mask.
+        output_dir (Path): Directory to save output files.
+        batch_idx (int): Batch index for file naming.
     """
-    logits = outputs['logits'].cpu().numpy()
-    hidden_states = outputs['hidden_states'].cpu().numpy()
-    attention_mask = outputs['attention_mask'].cpu().numpy()
-
-    # Save logits using numpy's memory-mapped format
+    # Save logits, hidden states, and attention mask as NumPy arrays
     logits_path = output_dir / f"logits_batch{batch_idx:04d}.npy"
-    np.save(logits_path, logits)
+    hidden_states_path = output_dir / f"hidden_states_batch{batch_idx:04d}.npy"
+    attention_mask_path = output_dir / f"attention_mask_batch{batch_idx:04d}.npy"
 
-    # Save hidden states
-    hs_path = output_dir / f"hidden_states_batch{batch_idx:04d}.npy"
-    np.save(hs_path, hidden_states)
+    np.save(logits_path, outputs['logits'].cpu().numpy())
+    np.save(hidden_states_path, outputs['hidden_states'].cpu().numpy())
+    np.save(attention_mask_path, outputs['attention_mask'].cpu().numpy())
 
-    # Save attention mask
-    am_path = output_dir / f"attention_mask_batch{batch_idx:04d}.npy"
-    np.save(am_path, attention_mask)
-
-    # Generate and save checksums for integrity verification
-    for file_path in [logits_path, hs_path, am_path]:
-        checksum = sha256sum(file_path)
-        with open(str(file_path) + ".sha256", "w") as f:
-            f.write(checksum)
-
-def sha256sum(filename: Path) -> str:
-    """Compute SHA-256 checksum of a file."""
-    h  = hashlib.sha256()
-    with open(filename, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            h.update(chunk)
-    return h.hexdigest()
+    # Generate checksums for saved files
+    generate_checksum(output_dir)
 
 def main():
-    logging.basicConfig(level=logging.INFO,
-                        format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    logger = logging.getLogger(__name__)
 
     teacher_model = "openai-community/gpt2-medium"
-    batch_size = 32  # Adjust based on available GPU memory
+    adapter_path = "data/adapters/final_adapters/gpt2_lora"  # Use fine-tuned LoRA adapter
+    batch_size = 4  # Aligned with fine-tuning effective batch size
 
     try:
-        loader = ModelLoader(model_name=teacher_model)
+        # Initialize ModelLoader with LoRA adapter
+        loader = ModelLoader(
+            model_name=teacher_model,
+            adapter_path=adapter_path,
+            max_length=128,  # Match fine-tuning
+            train_mode=False
+        )
         input_texts = TextPromptDataset("data/synthetic/prompts_v1.txt")
 
-        # Create output directory if it doesn't exist
+        # Create output directory
         output_dir = Path("data/synthetic/v1_t0.7")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-        for batch_idx, batch in enumerate(tqdm(chunked(input_texts, batch_size))):
+        # Process dataset in batches
+        for batch_idx, batch in enumerate(tqdm(chunked(input_texts, batch_size), desc="Generating logits")):
             outputs = loader.generate_logits(batch)
             save_logits(outputs, output_dir, batch_idx)
 
+        logger.info(f"Logit generation completed. Outputs saved to {output_dir}")
+
     except Exception as e:
-        logging.error(f"Logit generation failed: {str(e)}")
+        logger.error(f"Logit generation failed: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":
