@@ -103,15 +103,14 @@ class ModelLoader:
         """Verify model is GPT-2 variant."""
         return "gpt2" in model_name.lower()
 
-    def generate_logits(self, texts, **generation_kwargs):
+    def generate_logits(self, texts):
         """Generate model outputs with hidden states for distillation."""
         inputs = self.tokenizer(
             texts,
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=self.max_length,
-            **generation_kwargs
+            max_length=self.max_length
         ).to(self.device)
 
         with torch.no_grad() if not self.model.training else torch.enable_grad():

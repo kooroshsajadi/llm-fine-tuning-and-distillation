@@ -1,64 +1,77 @@
-import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
-from peft import PeftModel
+from typing import Optional, Dict, Any, Iterable, List
 from transformers import PreTrainedModel, TrainerCallback
-import json
 
 def sha256sum(filename: Path) -> str:
-    """
-    Compute SHA-256 checksum for a file.
-
-    Args:
-        filename (Path): Path to the file.
-
-    Returns:
-        str: Hexadecimal SHA-256 checksum.
-    """
+    """Compute SHA-256 checksum of a file."""
+    import hashlib
     h = hashlib.sha256()
-    with open(filename, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+    with open(filename, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
             h.update(chunk)
     return h.hexdigest()
 
-def save_adapter(model: PeftModel, base_model: str, lora_config, output_path: str) -> None:
+def save_adapter(
+    model: PreTrainedModel,
+    base_model: str,
+    lora_config: Any,
+    output_dir: str
+) -> None:
     """
     Save LoRA adapter with metadata.
 
     Args:
-        model (PeftModel): Fine-tuned model with LoRA adapters.
-        base_model (str): Name of the base model (e.g., "openai-community/gpt2-medium").
-        lora_config: LoRA configuration object.
-        output_path (str): Directory to save adapter files.
+        model: The model with LoRA adapters.
+        base_model: Name of the base model.
+        lora_config: LoRA configuration.
+        output_dir: Directory to save the adapter.
     """
-    output_path = Path(output_path)
-    output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_path)
     metadata = {
         "base_model": base_model,
-        "lora_rank": lora_config.r,
-        "lora_alpha": lora_config.lora_alpha,
-        "target_modules": list(lora_config.target_modules),
-        "architecture": "GPT-2"
+        "lora_config": lora_config.to_dict() if hasattr(lora_config, 'to_dict') else vars(lora_config)
     }
+    import json
     with open(output_path / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
 def generate_checksum(output_dir: str) -> None:
     """
-    Generate SHA-256 checksums for all files in a directory.
+    Generate SHA-256 checksums for all non-checksum files in output_dir.
 
     Args:
-        output_dir (str): Directory containing files to checksum.
+        output_dir: Directory containing files to checksum.
     """
     output_path = Path(output_dir)
-    for file in output_path.glob("*"):
-        if file.is_file() and not file.suffix.endswith(".sha256"):
-            checksum = sha256sum(file)
-            with open(file.with_suffix(file.suffix + ".sha256"), "w") as f:
+    for file_path in output_path.iterdir():
+        if file_path.is_file() and not file_path.suffix == '.sha256':
+            checksum = sha256sum(file_path)
+            with open(file_path.with_suffix(file_path.suffix + '.sha256'), 'w') as f:
                 f.write(checksum)
+
+def batch_iterable(iterable: Iterable, batch_size: int) -> List:
+    """
+    Yield batches of size batch_size from an iterable.
+
+    Args:
+        iterable (Iterable): The input iterable to batch.
+        batch_size (int): Number of items per batch.
+
+    Yields:
+        List: A batch of items from the iterable.
+    """
+    batch = []
+    for item in iterable:
+        batch.append(item)
+        if len(batch) == batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 class LogEpochLossCallback(TrainerCallback):
     """
@@ -81,7 +94,6 @@ class LogEpochLossCallback(TrainerCallback):
             **kwargs: Additional arguments.
         """
         if state.log_history:
-            # Get the most recent log entry with a loss value
             for log in reversed(state.log_history):
                 if 'loss' in log:
                     self.logger.info(f"Epoch {state.epoch:.0f}: Final Loss = {log['loss']:.4f}")

@@ -2,11 +2,10 @@
 import sys
 import logging
 from pathlib import Path
-from more_itertools import chunked
 from tqdm import tqdm
 from src.core.model_loader import ModelLoader
 from src.data.data_preparation import TextPromptDataset
-from src.utils import generate_checksum
+from src.utils import generate_checksum, batch_iterable
 import numpy as np
 
 def save_logits(outputs: dict, output_dir: Path, batch_idx: int):
@@ -48,7 +47,8 @@ def main():
             model_name=teacher_model,
             adapter_path=adapter_path,
             max_length=128,  # Match fine-tuning
-            train_mode=False
+            train_mode=False,
+            use_4bit=False  # Disable quantization on CPU
         )
         input_texts = TextPromptDataset("data/synthetic/prompts_v1.txt")
 
@@ -57,7 +57,7 @@ def main():
         output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         # Process dataset in batches
-        for batch_idx, batch in enumerate(tqdm(chunked(input_texts, batch_size), desc="Generating logits")):
+        for batch_idx, batch in enumerate(tqdm(batch_iterable(input_texts.prompts, batch_size), desc="Generating logits")):
             outputs = loader.generate_logits(batch)
             save_logits(outputs, output_dir, batch_idx)
 
