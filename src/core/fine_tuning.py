@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import torch
 import logging
 import os
@@ -7,6 +8,7 @@ from peft import LoraConfig
 from datasets import Dataset
 from src.core.model_loader import ModelLoader
 from src.utils import save_adapter, generate_checksum
+from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 
 # Logging setup unchanged
 logging.basicConfig(
@@ -26,7 +28,6 @@ class GPT2LoRAFineTuner:
         use_4bit_quant: bool = True,
         device_map: str = "auto"
     ):
-        # Unchanged
         self.base_model = base_model
         self.lora_config = LoraConfig(
             r=lora_rank,
@@ -48,46 +49,39 @@ class GPT2LoRAFineTuner:
         self.tokenizer = self.loader.tokenizer
 
     def prepare_dataset(self, data_path: str, max_length: int = 128) -> Dataset:
-        # Unchanged
-        if not Path(data_path).is_file():
-            raise FileNotFoundError(f"Dataset file not found: {data_path}")
-        with open(data_path, 'r', encoding='utf-8') as f:
-            prompts = [line.strip() for line in f if line.strip()]
-        if len(prompts) == 0:
-            raise ValueError("No valid prompts in dataset")
-        if len(prompts) < 4:
-            logger.warning(f"Dataset size ({len(prompts)}) is smaller than typical batch size (4)")
-        tokenized = self.tokenizer(
-            prompts,
-            padding='max_length',
-            truncation=True,
+        """
+        Prepare dataset for fine-tuning using data preparation utilities.
+
+        Args:
+            data_path (str): Path to the prompt file.
+            max_length (int): Maximum sequence length for tokenization.
+
+        Returns:
+            Dataset: Hugging Face Dataset with input_ids, attention_mask, and labels.
+        """
+        return prepare_tokenized_dataset(
+            file_path=data_path,
+            tokenizer=self.tokenizer,
             max_length=max_length,
-            return_tensors="pt"
+            logger=logger
         )
-        dataset = Dataset.from_dict({
-            'input_ids': tokenized['input_ids'],
-            'attention_mask': tokenized['attention_mask'],
-            'labels': tokenized['input_ids'].clone()
-        })
-        logger.info(f"Dataset prepared with {len(dataset)} examples")
-        return dataset
 
     def train(
         self,
         dataset: Dataset,
-        output_dir: str = "./lora_results",
+        output_dir: str = "./lora_training",
         per_device_train_batch_size: int = 1,
         num_train_epochs: int = 3,
         learning_rate: float = 1e-4,
         logging_steps: int = 10,
         save_strategy: str = "epoch"
     ):
-        # Mostly unchanged; updated save_adapter and generate_checksum calls
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
             import bitsandbytes
             optim_name = "paged_adamw_8bit" if torch.cuda.is_available() else "adamw_torch"
+            logger.warning("Bitsandbytes detected, using 8-bit optimizer")
         except ImportError:
             optim_name = "adamw_torch"
             logger.warning("bitsandbytes not installed. Using standard AdamW optimizer")
@@ -112,21 +106,11 @@ class GPT2LoRAFineTuner:
             dataloader_pin_memory=torch.cuda.is_available(),
             gradient_accumulation_steps=4
         )
-        def data_collator(features):
-            if not all('input_ids' in f and 'attention_mask' in f and 'labels' in f for f in features):
-                raise ValueError("Invalid dataset features")
-            batch = {
-                'input_ids': torch.stack([torch.tensor(f['input_ids'], dtype=torch.long) for f in features]),
-                'attention_mask': torch.stack([torch.tensor(f['attention_mask'], dtype=torch.long) for f in features]),
-                'labels': torch.stack([torch.tensor(f['labels'], dtype=torch.long) for f in features])
-            }
-            logger.debug(f"Batch shapes: input_ids={batch['input_ids'].shape}, attention_mask={batch['attention_mask'].shape}, labels={batch['labels'].shape}")
-            return batch
         trainer = Trainer(
             model=self.model,
             args=training_args,
             train_dataset=dataset,
-            data_collator=data_collator
+            data_collator=lambda features: data_collator(features, logger=logger)
         )
         try:
             import psutil
@@ -160,17 +144,20 @@ class GPT2LoRAFineTuner:
         save_adapter(self.model, self.base_model, self.lora_config, output_dir)
         generate_checksum(output_dir)
 
-    def main():
-        tuner = GPT2LoRAFineTuner(
-            base_model="openai-community/gpt2-medium",
-            lora_rank=8,
-            lora_alpha=32
-        )
-        dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
-        tuner.train(
-            dataset,
-            output_dir="adapters/gpt2_lora_v1",
-            per_device_train_batch_size=1,
-            num_train_epochs=3
-        )
-        save_adapter(tuner.model, tuner.base_model, tuner.lora_config, "final_adapters/gpt2_lora")
+def main():
+    tuner = GPT2LoRAFineTuner(
+        base_model="openai-community/gpt2-medium",
+        lora_rank=8,
+        lora_alpha=32
+    )
+    dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
+    tuner.train(
+        dataset,
+        output_dir="adapters/gpt2_lora_v1",
+        per_device_train_batch_size=1,
+        num_train_epochs=3
+    )
+    save_adapter(tuner.model, tuner.base_model, tuner.lora_config, "final_adapters/gpt2_lora")
+
+if __name__ == "__main__":
+    main()
