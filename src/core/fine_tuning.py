@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, Trainer, TrainingArguments
 from peft import LoraConfig
 from datasets import Dataset
 from src.core.model_loader import ModelLoader
-from src.utils import save_adapter, generate_checksum
+from src.utils import save_adapter, generate_checksum, LogEpochLossCallback
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 
 # Logging setup unchanged
@@ -110,7 +110,8 @@ class GPT2LoRAFineTuner:
             model=self.model,
             args=training_args,
             train_dataset=dataset,
-            data_collator=lambda features: data_collator(features, logger=logger)
+            data_collator=lambda features: data_collator(features, logger=logger),
+            callbacks=[LogEpochLossCallback(logger=logger)]
         )
         try:
             import psutil

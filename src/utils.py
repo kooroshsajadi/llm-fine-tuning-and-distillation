@@ -1,7 +1,11 @@
 import hashlib
-import json
+import logging
+import os
 from pathlib import Path
+from typing import Optional, Dict, Any
 from peft import PeftModel
+from transformers import PreTrainedModel, TrainerCallback
+import json
 
 def sha256sum(filename: Path) -> str:
     """
@@ -55,3 +59,30 @@ def generate_checksum(output_dir: str) -> None:
             checksum = sha256sum(file)
             with open(file.with_suffix(file.suffix + ".sha256"), "w") as f:
                 f.write(checksum)
+
+class LogEpochLossCallback(TrainerCallback):
+    """
+    Callback to log the final training loss after each epoch.
+
+    Args:
+        logger (logging.Logger, optional): Logger for printing loss values.
+    """
+    def __init__(self, logger: Optional[logging.Logger] = None):
+        self.logger = logger or logging.getLogger(__name__)
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        """
+        Log the final training loss at the end of each epoch.
+
+        Args:
+            args: TrainingArguments.
+            state: TrainerState containing log history.
+            control: TrainerControl.
+            **kwargs: Additional arguments.
+        """
+        if state.log_history:
+            # Get the most recent log entry with a loss value
+            for log in reversed(state.log_history):
+                if 'loss' in log:
+                    self.logger.info(f"Epoch {state.epoch:.0f}: Final Loss = {log['loss']:.4f}")
+                    break
