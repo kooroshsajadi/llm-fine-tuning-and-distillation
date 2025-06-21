@@ -9,8 +9,6 @@
 - Enable fast inference with reduced computational overhead.
 - Provide clean, modular code for reproducibility and experimentation.
 
----
-
 ## ⚙️ Features
 
 - 🔧 **Flexible architecture** for experimenting with different teacher-student models.
@@ -19,13 +17,9 @@
 - 📦 **Safe saving and loading** using `safetensors` format and integrity checks.
 - 🧪 **Modular design** for training, inference, and evaluation.
 
----
-
 ## 🚧 Status
 
 > **Note:** This project is still **under active development**. Expect changes in structure, functionality, and APIs in the near future.
-
----
 
 ## 📄 License
 
@@ -33,13 +27,8 @@ This project is licensed under the [Apache License, Version 2.0](https://www.apa
 
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations.
 
-**Note**: This license applies to the source code in this repository. Trained models (e.g., in `data/gpt2_small_kd`) and datasets (e.g., in `data/synthetic`) may be subject to separate licensing terms due to their dependencies or data sources. Please refer to the respective documentation for details.
-
----
+**Note**: This license applies to the source code in this repository. Trained models and datasets may be subject to separate licensing terms due to their dependencies or data sources. Please refer to the respective documentation for details.
 
 ## 👨‍💻 Author
 
 Kourosh Sajjadi  
-_Data Science Track, University of Pavia_
-
----
