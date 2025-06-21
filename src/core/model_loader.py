@@ -34,6 +34,7 @@ class ModelLoader:
             max_length (int): Maximum sequence length for tokenization.
             train_mode (bool): If True, set model to training mode (for fine-tuning or student KD).
         """
+        self.model_name = model_name  # Store model_name
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.use_fp16 = torch.cuda.is_available() and not use_4bit
         self.dtype = torch.float16 if self.use_fp16 else torch.float32
@@ -74,6 +75,9 @@ class ModelLoader:
             trust_remote_code=False
         ).to(self.device)
 
+        # Log model configuration
+        logger.debug(f"Model config: {self.model.config}")
+
         # Apply quantization preparation for LoRA
         if use_4bit and lora_config:
             self.model = prepare_model_for_kbit_training(self.model, use_gradient_checkpointing=False)
@@ -96,8 +100,19 @@ class ModelLoader:
         self.model.train(train_mode)
 
         # Load tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            padding_side='right',
+            trust_remote_code=False
+        )
         self.tokenizer.pad_token = self.tokenizer.eos_token
+        self.model.config.pad_token_id = self.tokenizer.pad_token_id
+        logger.info(f"Set model.config.pad_token_id to {self.model.config.pad_token_id}")
+
+        # Clear any invalid config attributes
+        if hasattr(self.model.config, 'loss_type') and self.model.config.loss_type is None:
+            self.model.config.loss_type = 'ForCausalLMLoss'
+            logger.info("Set model.config.loss_type to 'ForCausalLMLoss'")
 
     def _validate_model_source(self, model_name: str) -> bool:
         """Verify model is GPT-2 variant."""
@@ -108,7 +123,7 @@ class ModelLoader:
         inputs = self.tokenizer(
             texts,
             return_tensors="pt",
-            padding=True,
+            padding='max_length',
             truncation=True,
             max_length=self.max_length
         ).to(self.device)
