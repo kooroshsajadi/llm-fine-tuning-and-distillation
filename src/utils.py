@@ -1,7 +1,6 @@
 import logging
-import os
 from pathlib import Path
-from typing import Optional, Dict, Any, Iterable, List
+from typing import Optional, Any, Iterable, List
 from transformers import PreTrainedModel, TrainerCallback
 
 def sha256sum(filename: Path) -> str:
@@ -39,6 +38,22 @@ def save_adapter(
     with open(output_path / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
 
+def save_model(
+    model: PreTrainedModel,
+    output_dir: str
+) -> None:
+    """
+    Save a full pretrained model.
+
+    Args:
+        model: The pretrained model to save.
+        output_dir: Directory to save the model.
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_path)
+    logging.info(f"Model saved to {output_path}")
+
 def generate_checksum(output_dir: str) -> None:
     """
     Generate SHA-256 checksums for all non-checksum files in output_dir.
@@ -53,7 +68,9 @@ def generate_checksum(output_dir: str) -> None:
             with open(file_path.with_suffix(file_path.suffix + '.sha256'), 'w') as f:
                 f.write(checksum)
 
-def batch_iterable(iterable: Iterable, batch_size: int) -> List:
+from typing import Iterator
+
+def batch_iterable(iterable: Iterable, batch_size: int) -> Iterator[List[Any]]:
     """
     Yield batches of size batch_size from an iterable.
 
