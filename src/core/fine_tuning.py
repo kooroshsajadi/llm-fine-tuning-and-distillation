@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, Trainer, TrainingArguments
 from peft import LoraConfig
 from datasets import Dataset
 from src.core.model_loader import ModelLoader
-from src.utils import save_adapter, generate_checksum, LogEpochLossCallback
+from src.utils.utils import save_adapter, generate_checksum, LogEpochLossCallback
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 
 # Logging setup unchanged

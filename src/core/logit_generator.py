@@ -5,7 +5,7 @@ from pathlib import Path
 from tqdm import tqdm
 from src.core.model_loader import ModelLoader
 from src.data.data_preparation import TextPromptDataset
-from src.utils import generate_checksum, batch_iterable
+from src.utils.utils import generate_checksum, batch_iterable
 import numpy as np
 
 def save_logits(outputs: dict, output_dir: Path, batch_idx: int):
