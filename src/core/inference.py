@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import logging
-import argparse
 from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import numpy as np
+from src.data.data_preparation import prepare_tokenized_dataset
 
 # Logging setup
 logging.basicConfig(
@@ -18,20 +19,26 @@ def load_model_and_tokenizer(model_path: str, tokenizer_name: str = "openai-comm
     Load the trained model and tokenizer.
 
     Args:
-        model_path (str): Path to the saved model directory (e.g., adapters/gpt2_small_kd).
+        model_path (str): Path to the saved model directory (e.g., data/gpt2_small_kd).
         tokenizer_name (str): Hugging Face tokenizer name (default: openai-community/gpt2).
 
     Returns:
         tuple: (model, tokenizer)
 
     Raises:
-        FileNotFoundError: If model_path does not exist.
+        FileNotFoundError: If model_path or required files do not exist.
         RuntimeError: If model or tokenizer loading fails.
     """
     model_path = Path(model_path)
+    required_files = ['config.json', 'model.safetensors']
     if not model_path.is_dir():
         logger.error(f"Model directory does not exist: {model_path}")
         raise FileNotFoundError(f"Model directory does not exist: {model_path}")
+    
+    for file in required_files:
+        if not (model_path / file).exists():
+            logger.error(f"Required file missing in {model_path}: {file}")
+            raise FileNotFoundError(f"Required file missing: {file}")
 
     try:
         # Load tokenizer
@@ -49,7 +56,8 @@ def load_model_and_tokenizer(model_path: str, tokenizer_name: str = "openai-comm
             model_path,
             torch_dtype=torch.float32,  # CPU-based
             device_map={"": device},
-            trust_remote_code=False
+            trust_remote_code=False,
+            output_hidden_states=False  # Explicitly disable to avoid warning
         )
         model.eval()
         logger.info(f"Model loaded from {model_path} on {device}")
@@ -63,6 +71,49 @@ def load_model_and_tokenizer(model_path: str, tokenizer_name: str = "openai-comm
         logger.error(f"Failed to load model or tokenizer: {str(e)}")
         raise RuntimeError(f"Failed to load model or tokenizer: {str(e)}")
 
+def compute_perplexity(model, tokenizer, texts: list, max_length: int = 128) -> float:
+    """
+    Compute perplexity for a list of texts.
+
+    Args:
+        model: Loaded model for inference.
+        tokenizer: Loaded tokenizer.
+        texts (list): List of texts to evaluate.
+        max_length (int): Maximum sequence length for tokenization.
+
+    Returns:
+        float: Average perplexity across texts.
+    """
+    total_loss = 0.0
+    total_count = 0
+    model.eval()
+    for text in texts:
+        try:
+            inputs = tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_length
+            ).to(model.device)
+            with torch.no_grad():
+                outputs = model(**inputs, labels=inputs["input_ids"])
+            loss = outputs.loss.item()
+            total_loss += loss
+            total_count += 1
+            logger.debug(f"Loss for text '{text[:50]}...': {loss:.4f}")
+        except Exception as e:
+            logger.warning(f"Skipping text '{text[:50]}...' due to error: {str(e)}")
+    
+    if total_count == 0:
+        logger.error("No valid texts for perplexity computation")
+        raise RuntimeError("No valid texts for perplexity computation")
+    
+    avg_loss = total_loss / total_count
+    perplexity = np.exp(avg_loss)
+    logger.info(f"Average Perplexity: {perplexity:.2f} (Loss: {avg_loss:.4f})")
+    return perplexity
+
 def generate_text(model, tokenizer, prompt: str, max_length: int = 50, **generation_kwargs) -> str:
     """
     Generate text using the model for a given prompt.
@@ -71,7 +122,7 @@ def generate_text(model, tokenizer, prompt: str, max_length: int = 50, **generat
         model: Loaded model for inference.
         tokenizer: Loaded tokenizer.
         prompt (str): Input prompt for generation.
-        max_length (int): Maximum length of generated text (default: 50).
+        max_length (int): Maximum length of generated text.
         **generation_kwargs: Additional generation parameters (e.g., temperature, top_p).
 
     Returns:
@@ -81,7 +132,13 @@ def generate_text(model, tokenizer, prompt: str, max_length: int = 50, **generat
         RuntimeError: If generation fails.
     """
     try:
-        inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True).to(model.device)
+        inputs = tokenizer(
+            prompt,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=max_length
+        ).to(model.device)
         with torch.no_grad():
             outputs = model.generate(
                 input_ids=inputs["input_ids"],
@@ -97,18 +154,31 @@ def generate_text(model, tokenizer, prompt: str, max_length: int = 50, **generat
         logger.error(f"Generation failed for prompt '{prompt}': {str(e)}")
         raise RuntimeError(f"Generation failed: {str(e)}")
 
-def evaluate_model(model, tokenizer, prompts: list, max_length: int = 50, **generation_kwargs):
+def evaluate_model(
+    model,
+    tokenizer,
+    dataset,
+    max_length: int = 50,
+    perplexity_max_length: int = 128,
+    **generation_kwargs
+):
     """
-    Evaluate the model by generating text for a list of prompts.
+    Evaluate the model by generating text and computing perplexity.
 
     Args:
         model: Loaded model for inference.
         tokenizer: Loaded tokenizer.
-        prompts (list): List of input prompts for evaluation.
-        max_length (int): Maximum length of generated text (default: 50).
+        dataset: Hugging Face Dataset with input_ids for prompts.
+        max_length (int): Maximum length for text generation.
+        perplexity_max_length (int): Maximum length for perplexity computation.
         **generation_kwargs: Additional generation parameters.
     """
     logger.info("Starting model evaluation...")
+
+    # Decode prompts from dataset
+    prompts = [tokenizer.decode(item['input_ids'], skip_special_tokens=True) for item in dataset]
+
+    # Generate text for prompts
     for prompt in prompts:
         try:
             generated_text = generate_text(model, tokenizer, prompt, max_length, **generation_kwargs)
@@ -117,52 +187,56 @@ def evaluate_model(model, tokenizer, prompts: list, max_length: int = 50, **gene
         except RuntimeError as e:
             logger.error(f"Skipping prompt '{prompt}' due to error: {str(e)}")
 
+    # Compute perplexity on prompts
+    if prompts:
+        try:
+            compute_perplexity(model, tokenizer, prompts, perplexity_max_length)
+        except RuntimeError as e:
+            logger.error(f"Perplexity computation failed: {str(e)}")
+    else:
+        logger.warning("No prompts available for perplexity computation")
+
 def main():
     """
-    Main function to evaluate a trained model via text generation.
+    Main function to evaluate a trained model via text generation and perplexity.
 
     Example:
-        python -m src.scripts.inference --model_path adapters/gpt2_small_kd --prompt "Hello, world!"
+        python -m src.core.inference
     """
-    parser = argparse.ArgumentParser(description="Evaluate a trained model via text generation.")
-    parser.add_argument("--model_path", default="adapters/gpt2_small_kd",
-                        help="Path to the saved model directory")
-    parser.add_argument("--tokenizer_name", default="openai-community/gpt2",
-                        help="Hugging Face tokenizer name")
-    parser.add_argument("--prompt", default=None,
-                        help="Single prompt for generation (if not provided, uses default prompts)")
-    parser.add_argument("--max_length", type=int, default=50,
-                        help="Maximum length of generated text")
-    parser.add_argument("--temperature", type=float, default=0.7,
-                        help="Sampling temperature for generation")
-    parser.add_argument("--top_p", type=float, default=0.9,
-                        help="Top-p sampling probability")
-    args = parser.parse_args()
-
     try:
-        # Load model and tokenizer
-        model, tokenizer = load_model_and_tokenizer(args.model_path, args.tokenizer_name)
-
-        # Define prompts
-        if args.prompt:
-            prompts = [args.prompt]
-        else:
-            prompts = [
-                "The sun sets slowly behind the mountain, casting a warm glow over the valley.",
-                "In a world where AI governs all decisions, one human discovers a hidden truth.",
-                "What is the meaning of life in a universe without boundaries?"
-            ]
-            logger.info("Using default prompts for evaluation")
-
-        # Generation parameters
+        # Hardcoded parameters
+        model_path = "data/gpt2_small_kd"
+        test_file = "data/synthetic/prompts_v1.txt"
+        tokenizer_name = "openai-community/gpt2"
+        max_length = 50
+        perplexity_max_length = 128
         generation_kwargs = {
-            "temperature": args.temperature,
-            "top_p": args.top_p,
+            "temperature": 0.7,
+            "top_p": 0.9,
             "do_sample": True
         }
 
+        # Load model and tokenizer
+        model, tokenizer = load_model_and_tokenizer(model_path, tokenizer_name)
+
+        # Load prompts using prepare_tokenized_dataset
+        dataset = prepare_tokenized_dataset(
+            file_path=test_file,
+            tokenizer=tokenizer,
+            max_length=perplexity_max_length,
+            logger=logger
+        )
+        logger.info(f"Loaded dataset with {len(dataset)} prompts from {test_file}")
+
         # Evaluate model
-        evaluate_model(model, tokenizer, prompts, args.max_length, **generation_kwargs)
+        evaluate_model(
+            model,
+            tokenizer,
+            dataset,
+            max_length=max_length,
+            perplexity_max_length=perplexity_max_length,
+            **generation_kwargs
+        )
 
     except (FileNotFoundError, RuntimeError) as e:
         logger.error(str(e))
