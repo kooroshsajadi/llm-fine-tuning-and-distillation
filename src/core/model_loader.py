@@ -1,3 +1,4 @@
+from pathlib import Path
 import torch
 import logging
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -17,75 +18,69 @@ class ModelLoader:
         model_name="openai-community/gpt2-medium",
         adapter_path=None,
         lora_config=None,
-        use_4bit=False,
+        use_qlora=False,
         device_map="auto",
         max_length=128,
         train_mode=False
     ):
         """
-        Initialize model and tokenizer for fine-tuning or KD.
+        Initialize model and tokenizer for fine-tuning or inference.
 
         Args:
-            model_name (str): Hugging Face model name (e.g., "openai-community/gpt2").
-            adapter_path (str, optional): Path to LoRA adapter (None for base model).
+            model_name (str): Hugging Face model name or path (e.g., "data/gpt2_small_kd").
+            adapter_path (str, optional): Path to LoRA adapter.
             lora_config (LoraConfig, optional): LoRA configuration for fine-tuning.
-            use_4bit (bool): Enable 4-bit quantization (requires GPU and bitsandbytes).
-            device_map (str): Device placement strategy ("auto" or specific device).
+            use_qlora (bool): Enable QLoRA with 4-bit NF4 quantization (requires GPU and bitsandbytes).
+            device_map (str): Device placement strategy ("auto" or "cpu").
             max_length (int): Maximum sequence length for tokenization.
-            train_mode (bool): If True, set model to training mode (for fine-tuning or student KD).
+            train_mode (bool): Set model to training mode (for fine-tuning).
         """
-        self.model_name = model_name  # Store model_name
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.use_fp16 = torch.cuda.is_available() and not use_4bit
-        self.dtype = torch.float16 if self.use_fp16 else torch.float32
+        self.model_name = model_name
+        self.use_gpu = torch.cuda.is_available() and device_map != "cpu"
         self.max_length = max_length
         self.train_mode = train_mode
 
-        # Validate model source (specific to GPT-2 for fine-tuning)
-        if lora_config and not self._validate_model_source(model_name):
-            raise ValueError(f"Untrusted model source: {model_name}")
+        # Device and dtype setup
+        self.device = torch.device("cuda" if self.use_gpu else "cpu")
+        self.use_fp16 = self.use_gpu and not use_qlora
+        self.dtype = torch.float16 if self.use_fp16 else torch.float32
+        logger.info(f"Using {'GPU' if self.use_gpu else 'CPU'} with dtype {self.dtype}")
 
-        # Configure quantization
+        # Quantization config
         bnb_config = None
-        if use_4bit:
-            if not torch.cuda.is_available():
-                logger.warning("No GPU detected; disabling 4-bit quantization")
-                use_4bit = False
+        if use_qlora:
+            if not self.use_gpu:
+                logger.warning("QLoRA requires GPU; disabling quantization")
+                use_qlora = False
+            elif not self._check_bitsandbytes():
+                logger.warning("bitsandbytes unavailable; disabling QLoRA")
+                use_qlora = False
             else:
-                try:
-                    import bitsandbytes
-                    bnb_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_quant_type="nf4",
-                        bnb_4bit_use_double_quant=True
-                    )
-                    logger.info("4-bit quantization enabled")
-                except ImportError:
-                    logger.warning("bitsandbytes unavailable - using FP32 precision")
-                    use_4bit = False
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.bfloat16,
+                    bnb_4bit_use_double_quant=True
+                )
+                logger.info("QLoRA enabled with 4-bit NF4 quantization")
 
         # Load model
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
             quantization_config=bnb_config,
-            device_map=device_map if use_4bit else None,
-            output_hidden_states=True,  # For KD
-            torch_dtype=self.dtype if not use_4bit else None,
+            device_map=device_map if not bnb_config else None,
+            output_hidden_states=False,  # Disable to avoid warning
+            torch_dtype=self.dtype if not bnb_config else None,
             trust_remote_code=False
         ).to(self.device)
 
-        # Log model configuration
-        logger.debug(f"Model config: {self.model.config}")
+        # Prepare for k-bit training (QLoRA)
+        if use_qlora and lora_config:
+            self.model = prepare_model_for_kbit_training(self.model, use_gradient_checkpointing=True)
 
-        # Apply quantization preparation for LoRA
-        if use_4bit and lora_config:
-            self.model = prepare_model_for_kbit_training(self.model, use_gradient_checkpointing=False)
-
-        # Apply LoRA if provided
+        # Apply LoRA or adapter
         if lora_config:
             self.model = get_peft_model(self.model, lora_config)
-            # Freeze non-LoRA parameters
             for name, param in self.model.named_parameters():
                 param.requires_grad = "lora" in name.lower()
             self.model.print_trainable_parameters()
@@ -109,17 +104,20 @@ class ModelLoader:
         self.model.config.pad_token_id = self.tokenizer.pad_token_id
         logger.info(f"Set model.config.pad_token_id to {self.model.config.pad_token_id}")
 
-        # Clear any invalid config attributes
-        if hasattr(self.model.config, 'loss_type') and self.model.config.loss_type is None:
-            self.model.config.loss_type = 'ForCausalLMLoss'
-            logger.info("Set model.config.loss_type to 'ForCausalLMLoss'")
+    def _check_bitsandbytes(self) -> bool:
+        """Check if bitsandbytes is available."""
+        try:
+            import bitsandbytes
+            return True
+        except ImportError:
+            return False
 
     def _validate_model_source(self, model_name: str) -> bool:
-        """Verify model is GPT-2 variant."""
-        return "gpt2" in model_name.lower()
+        """Verify model is GPT-2 variant or local path."""
+        return "gpt2" in model_name.lower() or Path(model_name).exists()
 
     def generate_logits(self, texts):
-        """Generate model outputs with hidden states for distillation."""
+        """Generate model outputs for inference or distillation."""
         inputs = self.tokenizer(
             texts,
             return_tensors="pt",
@@ -133,6 +131,5 @@ class ModelLoader:
 
         return {
             'logits': outputs.logits,
-            'hidden_states': outputs.hidden_states[-1],
             'attention_mask': inputs.attention_mask
         }
