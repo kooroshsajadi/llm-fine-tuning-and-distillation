@@ -34,7 +34,7 @@ class QLoRAFineTuner:
         - Automatic fallback to LoRA when QLoRA requirements not met
 
         Args:
-            base_model (str): Model name or path (e.g., "data/gpt2_small_kd").
+            base_model (str): Model name or path.
             lora_rank (int): LoRA rank.
             lora_alpha (int): LoRA scaling factor.
             lora_dropout (float): LoRA dropout rate.
@@ -79,7 +79,7 @@ class QLoRAFineTuner:
         Prepare dataset using project-standard function.
 
         Args:
-            data_path (str): Path to prompt file (e.g., "data/synthetic/prompts_v1.txt").
+            data_path (str): Path to prompt file.
 
         Returns:
             Dataset: Hugging Face Dataset with input_ids, attention_mask, labels.
@@ -94,7 +94,7 @@ class QLoRAFineTuner:
     def train(
         self,
         dataset: Dataset,
-        output_dir: str = "./fine_tuned_model",
+        output_dir: str = "model/fine_tuned_model",
         per_device_train_batch_size: int = 1,
         num_train_epochs: int = 3,
         learning_rate: float = 1e-4,
@@ -193,3 +193,15 @@ class QLoRAFineTuner:
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
         logger.info(f"Model and tokenizer saved to {output_dir}")
+
+def main():
+    # tuner = QLoRAFineTuner(base_model="openai-community/gpt2-medium", use_qlora=True)
+    # dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
+    # tuner.train(dataset, output_dir="data/qlora_fine_tuned")
+
+    tuner = QLoRAFineTuner(base_model="openai-community/gpt2-medium", use_qlora=False, device_map="cpu")
+    dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
+    tuner.train(dataset, output_dir="data/lora_fine_tuned")
+
+if __name__ == "__main__":
+    main()
