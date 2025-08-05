@@ -216,7 +216,7 @@ def main():
         max_length=tuner_config.get('max_length', 128),
         logger=logger
     )
-    dataset = tuner.prepare_dataset(config['datasets']['prompts'])
+    dataset = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'])
     tuner.train(
         dataset=dataset,
         output_dir=config['fine_tuning']['output_dir'],
