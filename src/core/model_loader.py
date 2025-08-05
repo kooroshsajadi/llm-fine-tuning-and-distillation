@@ -1,13 +1,25 @@
 from pathlib import Path
 import torch
 import logging
-from transformers import AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM,
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    BitsAndBytesConfig
+)
 from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 from src.utils.logging_utils import setup_logger
 
 logger = setup_logger(__name__)
 
 class ModelLoader:
+    MODEL_TYPE_MAPPING = {
+        "causal_lm": AutoModelForCausalLM,
+        "masked_lm": AutoModelForMaskedLM,
+        "seq2seq": AutoModelForSeq2SeqLM
+    }
+
     def __init__(
         self,
         model_name: str = "openai-community/gpt2-medium",
@@ -19,19 +31,6 @@ class ModelLoader:
         max_length: int = 128,
         train_mode: bool = False
     ):
-        """
-        Initialize model and tokenizer for fine-tuning or inference.
-
-        Args:
-            model_name (str): Hugging Face model name or path.
-            model_type (str): Model type ("causal_lm" or "masked_lm").
-            adapter_path (str, optional): Path to LoRA adapter.
-            lora_config (LoraConfig, optional): LoRA configuration.
-            use_qlora (bool): Enable QLoRA (requires CUDA GPU and bitsandbytes).
-            device_map (str): Device placement strategy ("auto", "cpu", "xpu").
-            max_length (int): Maximum sequence length.
-            train_mode (bool): Set model to training mode.
-        """
         self.model_name = model_name
         self.model_type = model_type.lower()
         self.use_gpu = torch.cuda.is_available() or torch.xpu.is_available()
@@ -39,7 +38,9 @@ class ModelLoader:
         self.max_length = max_length
         self.train_mode = train_mode
 
-        # Device and dtype setup
+        if self.model_type not in self.MODEL_TYPE_MAPPING:
+            raise ValueError(f"Unsupported model_type: {self.model_type}. Choose from {list(self.MODEL_TYPE_MAPPING.keys())}")
+
         if device_map == "auto":
             self.device = torch.device(
                 "xpu" if self.use_xpu else "cuda" if torch.cuda.is_available() else "cpu"
@@ -50,7 +51,6 @@ class ModelLoader:
         self.dtype = torch.float16 if self.use_fp16 else torch.bfloat16 if self.use_xpu else torch.float32
         logger.info(f"Using {'XPU' if self.use_xpu else 'CUDA' if torch.cuda.is_available() else 'CPU'} with dtype {self.dtype}")
 
-        # Quantization config
         bnb_config = None
         if use_qlora:
             if not torch.cuda.is_available():
@@ -71,33 +71,20 @@ class ModelLoader:
                 )
                 logger.info("QLoRA enabled with 4-bit NF4 quantization")
 
-        # Load model
         try:
-            if self.model_type == "causal_lm":
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    model_name,
-                    quantization_config=bnb_config,
-                    device_map=device_map if not bnb_config else None,
-                    output_hidden_states=False,
-                    torch_dtype=self.dtype if not bnb_config else None,
-                    trust_remote_code=False
-                ).to(self.device)
-            elif self.model_type == "masked_lm":
-                self.model = AutoModelForMaskedLM.from_pretrained(
-                    model_name,
-                    quantization_config=bnb_config,
-                    device_map=device_map if not bnb_config else None,
-                    output_hidden_states=False,
-                    torch_dtype=self.dtype if not bnb_config else None,
-                    trust_remote_code=False
-                ).to(self.device)
-            else:
-                raise ValueError(f"Unsupported model_type: {model_type}")
+            model_class = self.MODEL_TYPE_MAPPING[self.model_type]
+            self.model = model_class.from_pretrained(
+                model_name,
+                quantization_config=bnb_config,
+                device_map=device_map if not bnb_config else None,
+                output_hidden_states=False,
+                torch_dtype=self.dtype if not bnb_config else None,
+                trust_remote_code=False
+            ).to(self.device)
         except Exception as e:
             logger.error(f"Failed to load model {model_name}: {str(e)}")
             raise
 
-        # Optimize for Intel ARC
         if self.use_xpu:
             try:
                 import intel_extension_for_pytorch as ipex
@@ -106,11 +93,9 @@ class ModelLoader:
             except ImportError:
                 logger.warning("intel-extension-for-pytorch not installed; skipping IPEX optimization")
 
-        # Prepare for k-bit training (QLoRA)
         if use_qlora and lora_config:
             self.model = prepare_model_for_kbit_training(self.model, use_gradient_checkpointing=True)
 
-        # Apply LoRA or adapter
         if lora_config:
             self.model = get_peft_model(self.model, lora_config)
             for name, param in self.model.named_parameters():
@@ -127,30 +112,33 @@ class ModelLoader:
                 logger.error(f"Failed to load adapter from {adapter_path}: {str(e)}")
                 raise
 
-        # Set mode
         self.model.train(train_mode)
 
-        # Load tokenizer
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_name,
                 padding_side='right' if self.model_type == "causal_lm" else 'left',
                 trust_remote_code=False
             )
-            if self.model_type == "causal_lm":
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-                self.model.config.pad_token_id = self.tokenizer.pad_token_id
-            elif self.model_type == "masked_lm":
-                if not self.tokenizer.pad_token:
+            # Ensure pad_token is set
+            if not self.tokenizer.pad_token:
+                if self.model_type == "masked_lm":
+                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                    logger.info("Added [PAD] as pad_token for tokenizer")
+                else:
                     self.tokenizer.pad_token = self.tokenizer.eos_token or '[PAD]'
-                self.model.config.pad_token_id = self.tokenizer.pad_token_id
+                    logger.info(f"Set pad_token to {self.tokenizer.pad_token}")
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id
+            # Resize model embeddings if pad_token was added
+            if self.tokenizer.pad_token_id >= self.model.config.vocab_size:
+                self.model.resize_token_embeddings(len(self.tokenizer))
+                logger.info(f"Resized model embeddings to {len(self.tokenizer)} to accommodate pad_token")
             logger.info(f"Set model.config.pad_token_id to {self.model.config.pad_token_id}")
         except Exception as e:
             logger.error(f"Failed to load tokenizer for {model_name}: {str(e)}")
             raise
 
     def _check_bitsandbytes(self) -> bool:
-        """Check if bitsandbytes is available."""
         try:
             import bitsandbytes
             return True
@@ -158,12 +146,10 @@ class ModelLoader:
             return False
 
     def _validate_model_source(self, model_name: str) -> bool:
-        """Verify model is a supported variant or local path."""
-        supported_models = ["gpt2", "bert-base-italian", "electra-base-italian"]
+        supported_models = ["gpt2", "bert-base-italian", "electra-base-italian", "t5"]
         return any(model in model_name.lower() for model in supported_models) or Path(model_name).exists()
 
     def generate_logits(self, texts: list[str]) -> dict:
-        """Generate model outputs for inference or distillation."""
         try:
             inputs = self.tokenizer(
                 texts,
