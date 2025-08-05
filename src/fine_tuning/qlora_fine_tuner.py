@@ -201,7 +201,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    with open('src/configs/config.yaml') as file:
+    with open('configs/config.yaml') as file:
         config = yaml.safe_load(file)
 
     tuner_config = config.get('fine_tuning', {})
