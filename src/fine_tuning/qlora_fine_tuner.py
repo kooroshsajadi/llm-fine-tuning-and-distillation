@@ -11,23 +11,19 @@ from src.fine_tuning.fine_tuner import FineTuner
 import yaml
 
 # Logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
 logger = logging.getLogger(__name__)
 
 class QLoRAFineTuner(FineTuner):
-    """QLoRA/LoRA Fine-Tuner implementing FineTuner interface."""
+    """QLoRA/LoRA Fine-Tuner implementing FineTuner interface, supporting multiple model types."""
 
     def __init__(
         self,
         base_model: str = "openai-community/gpt2-medium",
+        model_type: str = "causal_lm",
         lora_rank: int = 8,
         lora_alpha: int = 32,
         lora_dropout: float = 0.05,
-        target_modules: list = ["c_attn", "c_proj", "mlp.c_proj"],
+        target_modules: list | None = None,
         use_qlora: bool = True,
         device_map: str = "auto",
         max_length: int = 128,
@@ -37,20 +33,31 @@ class QLoRAFineTuner(FineTuner):
         Initialize QLoRAFineTuner with configuration parameters.
 
         Args:
-            base_model (str): Model name or path.
+            base_model (str): Model name or path (e.g., "dbmdz/bert-base-italian-cased").
+            model_type (str): Model type ("causal_lm" or "masked_lm").
             lora_rank (int): LoRA rank.
             lora_alpha (int): LoRA scaling factor.
             lora_dropout (float): LoRA dropout rate.
-            target_modules (list): Modules to apply LoRA.
-            use_qlora (bool): Enable QLoRA (requires GPU and bitsandbytes).
-            device_map (str): Device placement strategy.
+            target_modules (list, optional): Modules to apply LoRA (auto-detected if None).
+            use_qlora (bool): Enable QLoRA (requires CUDA GPU and bitsandbytes).
+            device_map (str): Device placement strategy ("auto", "cpu", "xpu").
             max_length (int): Maximum sequence length.
             logger (logging.Logger): Logger instance.
         """
         super().__init__(logger)
         self.base_model = base_model
+        self.model_type = model_type.lower()
         self.max_length = max_length
         self.use_qlora = use_qlora
+
+        # Set default target_modules based on model_type
+        if target_modules is None:
+            if self.model_type == "causal_lm":
+                target_modules = ["c_attn", "c_proj", "mlp.c_proj"]
+            elif self.model_type == "masked_lm":
+                target_modules = ["query", "key", "value", "output.dense"]
+            else:
+                raise ValueError(f"Unsupported model_type: {model_type}")
 
         # LoRA configuration
         self.lora_config = LoraConfig(
@@ -59,13 +66,14 @@ class QLoRAFineTuner(FineTuner):
             target_modules=target_modules,
             lora_dropout=lora_dropout,
             bias="none",
-            task_type="CAUSAL_LM",
-            fan_in_fan_out=True
+            task_type="CAUSAL_LM" if self.model_type == "causal_lm" else "MASKED_LM",
+            fan_in_fan_out=(self.model_type == "causal_lm")
         )
 
         # Load model and tokenizer via ModelLoader
         self.loader = ModelLoader(
             model_name=base_model,
+            model_type=self.model_type,
             lora_config=self.lora_config,
             use_qlora=use_qlora,
             device_map=device_map,
@@ -84,23 +92,24 @@ class QLoRAFineTuner(FineTuner):
         Prepare dataset using project-standard function.
 
         Args:
-            data_path (str): Path to prompt file.
+            data_path (str): Path to directory of prompt files.
 
         Returns:
             Dataset: Hugging Face Dataset with input_ids, attention_mask, labels.
         """
         self.logger.info("Preparing dataset from %s", data_path)
         return prepare_tokenized_dataset(
-            file_path=data_path,
+            input_path=data_path,
             tokenizer=self.tokenizer,
             max_length=self.max_length,
-            logger=self.logger
+            logger=self.logger,
+            model_type=self.model_type
         )
 
     def train(
         self,
         dataset: Dataset,
-        output_dir: str = "model/fine_tuned_model",
+        output_dir: str = "data/outputs/models/fine_tuned_model",
         per_device_train_batch_size: int = 1,
         num_train_epochs: int = 3,
         learning_rate: float = 1e-4,
@@ -123,7 +132,7 @@ class QLoRAFineTuner(FineTuner):
         output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         # Optimizer
-        optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu else "adamw_torch"
+        optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
 
         # Training arguments
@@ -135,7 +144,8 @@ class QLoRAFineTuner(FineTuner):
             logging_steps=logging_steps,
             save_strategy=save_strategy,
             report_to="none",
-            fp16=self.use_gpu,
+            fp16=self.use_gpu and not self.loader.use_xpu,  # FP16 for CUDA only
+            bf16=self.loader.use_xpu,  # BF16 for Intel ARC
             remove_unused_columns=False,
             optim=optim_name,
             gradient_checkpointing=self.use_gpu,
@@ -152,7 +162,7 @@ class QLoRAFineTuner(FineTuner):
             model=self.model,
             args=training_args,
             train_dataset=dataset,
-            data_collator=lambda features: data_collator(features, logger=self.logger)
+            data_collator=lambda features: data_collator(features, logger=self.logger, model_type=self.model_type)
         )
 
         # Gradient verification
@@ -201,17 +211,18 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    with open('configs/config.yaml') as file:
+    with open('configs/fine_tuning/bert-italian.yaml') as file:
         config = yaml.safe_load(file)
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
-        base_model=tuner_config.get('base_model', 'openai-community/gpt2-medium'),
+        base_model=tuner_config.get('base_model', 'dbmdz/bert-base-italian-cased'),
+        model_type=tuner_config.get('model_type', 'masked_lm'),
         lora_rank=tuner_config.get('lora_rank', 8),
         lora_alpha=tuner_config.get('lora_alpha', 32),
         lora_dropout=tuner_config.get('lora_dropout', 0.05),
-        target_modules=tuner_config.get('target_modules', ["c_attn", "c_proj", "mlp.c_proj"]),
-        use_qlora=tuner_config.get('use_qlora', True),
+        target_modules=tuner_config.get('target_modules', None),
+        use_qlora=tuner_config.get('use_qlora', False),  # False for Intel ARC
         device_map=tuner_config.get('device_map', 'auto'),
         max_length=tuner_config.get('max_length', 128),
         logger=logger
