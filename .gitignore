@@ -6,3 +6,4 @@ data/
 .vscode/
 model/
 configs/
+logs/
