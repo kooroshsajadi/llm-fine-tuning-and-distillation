@@ -7,6 +7,7 @@ from peft import LoraConfig
 from datasets import Dataset
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 from src.core.model_loader import ModelLoader
+from src.fine_tuning.fine_tuner import FineTuner
 import yaml
 
 # Logging setup
@@ -17,7 +18,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class QLoRAFineTuner:
+class QLoRAFineTuner(FineTuner):
+    """QLoRA/LoRA Fine-Tuner implementing FineTuner interface."""
+
     def __init__(
         self,
         base_model: str = "openai-community/gpt2-medium",
@@ -27,12 +30,11 @@ class QLoRAFineTuner:
         target_modules: list = ["c_attn", "c_proj", "mlp.c_proj"],
         use_qlora: bool = True,
         device_map: str = "auto",
-        max_length: int = 128
+        max_length: int = 128,
+        logger: logging.Logger = logger
     ):
         """
-        QLoRA/LoRA Fine-Tuner implementing:
-        - QLoRA: Efficient Finetuning of Quantized LLMs (Dettmers et al., 2023)
-        - Automatic fallback to LoRA when QLoRA requirements not met
+        Initialize QLoRAFineTuner with configuration parameters.
 
         Args:
             base_model (str): Model name or path.
@@ -43,7 +45,9 @@ class QLoRAFineTuner:
             use_qlora (bool): Enable QLoRA (requires GPU and bitsandbytes).
             device_map (str): Device placement strategy.
             max_length (int): Maximum sequence length.
+            logger (logging.Logger): Logger instance.
         """
+        super().__init__(logger)
         self.base_model = base_model
         self.max_length = max_length
         self.use_qlora = use_qlora
@@ -85,11 +89,12 @@ class QLoRAFineTuner:
         Returns:
             Dataset: Hugging Face Dataset with input_ids, attention_mask, labels.
         """
+        self.logger.info("Preparing dataset from %s", data_path)
         return prepare_tokenized_dataset(
             file_path=data_path,
             tokenizer=self.tokenizer,
             max_length=self.max_length,
-            logger=logger
+            logger=self.logger
         )
 
     def train(
@@ -119,7 +124,7 @@ class QLoRAFineTuner:
 
         # Optimizer
         optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu else "adamw_torch"
-        logger.info(f"Using optimizer: {optim_name}")
+        self.logger.info(f"Using optimizer: {optim_name}")
 
         # Training arguments
         training_args = TrainingArguments(
@@ -147,12 +152,12 @@ class QLoRAFineTuner:
             model=self.model,
             args=training_args,
             train_dataset=dataset,
-            data_collator=lambda features: data_collator(features, logger=logger)
+            data_collator=lambda features: data_collator(features, logger=self.logger)
         )
 
         # Gradient verification
         try:
-            logger.info("Verifying gradient connectivity...")
+            self.logger.info("Verifying gradient connectivity...")
             test_input = next(iter(trainer.get_train_dataloader()))
             test_input = {k: v.to(self.model.device) for k, v in test_input.items()}
             with torch.set_grad_enabled(True):
@@ -164,22 +169,22 @@ class QLoRAFineTuner:
                 gradient_found = False
                 for name, param in self.model.named_parameters():
                     if param.requires_grad and param.grad is not None:
-                        logger.info(f"Gradient found for {name}")
+                        self.logger.info(f"Gradient found for {name}")
                         gradient_found = True
                 if not gradient_found:
                     raise RuntimeError("No gradients computed")
-            logger.info("Gradient verification passed")
+            self.logger.info("Gradient verification passed")
         except Exception as e:
-            logger.error(f"Gradient verification failed: {str(e)}")
+            self.logger.error(f"Gradient verification failed: {str(e)}")
             raise
 
         # Memory logging
         try:
             import psutil
             process = psutil.Process(os.getpid())
-            logger.info(f"Initial memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
+            self.logger.info(f"Initial memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
         except ImportError:
-            logger.warning("psutil not installed; memory logging disabled")
+            self.logger.warning("psutil not installed; memory logging disabled")
 
         # Train
         self.model.config.use_cache = False
@@ -188,25 +193,39 @@ class QLoRAFineTuner:
 
         # Final memory logging
         if 'psutil' in locals():
-            logger.info(f"Final memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
+            self.logger.info(f"Final memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
 
         # Save model
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
-        logger.info(f"Model and tokenizer saved to {output_dir}")
+        self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    # Load configurations.
-    # with open('config.yaml') as file:
-    #     config = yaml.safe_load(file)
+    with open('src/configs/config.yaml') as file:
+        config = yaml.safe_load(file)
 
-    # tuner = QLoRAFineTuner(base_model="openai-community/gpt2-medium", use_qlora=True)
-    # dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
-    # tuner.train(dataset, output_dir="data/qlora_fine_tuned")
-
-    tuner = QLoRAFineTuner(base_model="openai-community/gpt2-medium", use_qlora=False, device_map="cpu")
-    dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
-    tuner.train(dataset, output_dir="data/lora_fine_tuned")
+    tuner_config = config.get('fine_tuning', {})
+    tuner = QLoRAFineTuner(
+        base_model=tuner_config.get('base_model', 'openai-community/gpt2-medium'),
+        lora_rank=tuner_config.get('lora_rank', 8),
+        lora_alpha=tuner_config.get('lora_alpha', 32),
+        lora_dropout=tuner_config.get('lora_dropout', 0.05),
+        target_modules=tuner_config.get('target_modules', ["c_attn", "c_proj", "mlp.c_proj"]),
+        use_qlora=tuner_config.get('use_qlora', True),
+        device_map=tuner_config.get('device_map', 'auto'),
+        max_length=tuner_config.get('max_length', 128),
+        logger=logger
+    )
+    dataset = tuner.prepare_dataset(config['datasets']['prompts'])
+    tuner.train(
+        dataset=dataset,
+        output_dir=config['fine_tuning']['output_dir'],
+        per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
+        num_train_epochs=tuner_config.get('num_train_epochs', 3),
+        learning_rate=tuner_config.get('learning_rate', 1e-4),
+        logging_steps=tuner_config.get('logging_steps', 10),
+        save_strategy=tuner_config.get('save_strategy', 'epoch')
+    )
 
 if __name__ == "__main__":
     main()
