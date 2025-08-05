@@ -58,19 +58,6 @@ def prepare_tokenized_dataset(
     logger: Optional[logging.Logger] = None,
     model_type: str = "causal_lm"
 ) -> Dataset:
-    """
-    Prepare a tokenized dataset for fine-tuning.
-
-    Args:
-        input_path (str): Path to directory of .txt files or a single .txt file.
-        tokenizer (AutoTokenizer): Tokenizer for processing prompts.
-        max_length (int): Maximum sequence length.
-        logger (logging.Logger, optional): Logger for info and warnings.
-        model_type (str): Model type ("causal_lm" or "masked_lm").
-
-    Returns:
-        Dataset: Hugging Face Dataset with input_ids, attention_mask, and labels.
-    """
     if logger is None:
         logger = setup_logger(__name__)
 
@@ -85,7 +72,6 @@ def prepare_tokenized_dataset(
 
     try:
         if model_type == "masked_lm":
-            # For MLM, add random masking to labels
             tokenized = tokenizer(
                 prompts,
                 padding='max_length',
@@ -99,10 +85,19 @@ def prepare_tokenized_dataset(
             probability_matrix = torch.full(labels.shape, 0.15)
             probability_matrix.masked_fill_(special_tokens_mask, 0.0)
             masked_indices = torch.bernoulli(probability_matrix).bool()
-            labels[~masked_indices] = -100  # Ignore non-masked tokens in loss
+            labels[~masked_indices] = -100
             labels[masked_indices] = tokenized['input_ids'][masked_indices]
+        elif model_type == "seq2seq":
+            tokenized = tokenizer(
+                prompts,
+                padding='max_length',
+                truncation=True,
+                max_length=max_length,
+                return_tensors="pt"
+            )
+            labels = tokenized['input_ids'].clone()
+            labels[labels == tokenizer.pad_token_id] = -100
         else:
-            # For CLM, use input_ids as labels
             tokenized = tokenizer(
                 prompts,
                 padding='max_length',
