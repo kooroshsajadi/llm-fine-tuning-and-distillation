@@ -7,6 +7,7 @@ from peft import LoraConfig
 from datasets import Dataset
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 from src.core.model_loader import ModelLoader
+import yaml
 
 # Logging setup
 logging.basicConfig(
@@ -195,6 +196,10 @@ class QLoRAFineTuner:
         logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
+    # Load configurations.
+    # with open('config.yaml') as file:
+    #     config = yaml.safe_load(file)
+
     # tuner = QLoRAFineTuner(base_model="openai-community/gpt2-medium", use_qlora=True)
     # dataset = tuner.prepare_dataset("data/synthetic/prompts_v1.txt")
     # tuner.train(dataset, output_dir="data/qlora_fine_tuned")
