@@ -9,12 +9,21 @@ from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
 import yaml
+from src.utils.logging_utils import setup_logger
 
 # Logging setup
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 class QLoRAFineTuner(FineTuner):
-    """QLoRA/LoRA Fine-Tuner implementing FineTuner interface, supporting multiple model types."""
+    """QLoRA/LoRA Fine-Tuner supporting multiple model types."""
+
+    DEFAULT_TARGET_MODULES = {
+        "causal_lm": ["c_attn", "c_proj", "mlp.c_proj"],
+        "masked_lm": ["query", "key", "value", "output.dense"],
+        # "masked_lm": ["q", "k", "v", "dense"],
+        "SEQ_2_SEQ_LM": ["self_attn.k", "self_attn.q", "self_attn.v", "self_attn.out", "encoder_attn.k",
+                                       "encoder_attn.q", "encoder_attn.v", "encoder_attn.out", "fc1", "fc2"]
+    }
 
     def __init__(
         self,
@@ -33,31 +42,28 @@ class QLoRAFineTuner(FineTuner):
         Initialize QLoRAFineTuner with configuration parameters.
 
         Args:
-            base_model (str): Model name or path (e.g., "dbmdz/bert-base-italian-cased").
-            model_type (str): Model type ("causal_lm" or "masked_lm").
+            base_model (str): Model name or path.
+            model_type (str): Model type ("causal_lm", "masked_lm", "seq2seq").
             lora_rank (int): LoRA rank.
             lora_alpha (int): LoRA scaling factor.
             lora_dropout (float): LoRA dropout rate.
             target_modules (list, optional): Modules to apply LoRA (auto-detected if None).
-            use_qlora (bool): Enable QLoRA (requires CUDA GPU and bitsandbytes).
-            device_map (str): Device placement strategy ("auto", "cpu", "xpu").
+            use_qlora (bool): Enable QLoRA (requires CUDA GPU).
+            device_map (str): Device placement strategy.
             max_length (int): Maximum sequence length.
             logger (logging.Logger): Logger instance.
         """
         super().__init__(logger)
         self.base_model = base_model
-        self.model_type = model_type.lower()
+        self.model_type = model_type
         self.max_length = max_length
         self.use_qlora = use_qlora
 
-        # Set default target_modules based on model_type
-        if target_modules is None:
-            if self.model_type == "causal_lm":
-                target_modules = ["c_attn", "c_proj", "mlp.c_proj"]
-            elif self.model_type == "masked_lm":
-                target_modules = ["query", "key", "value", "output.dense"]
-            else:
-                raise ValueError(f"Unsupported model_type: {model_type}")
+        if self.model_type not in self.DEFAULT_TARGET_MODULES:
+            raise ValueError(f"Unsupported model_type: {self.model_type}. Choose from {list(self.DEFAULT_TARGET_MODULES.keys())}")
+
+        # Set target_modules
+        target_modules = target_modules or self.DEFAULT_TARGET_MODULES[self.model_type]
 
         # LoRA configuration
         self.lora_config = LoraConfig(
@@ -66,11 +72,11 @@ class QLoRAFineTuner(FineTuner):
             target_modules=target_modules,
             lora_dropout=lora_dropout,
             bias="none",
-            task_type="CAUSAL_LM" if self.model_type == "causal_lm" else "MASKED_LM",
+            task_type=self.model_type.upper(),
             fan_in_fan_out=(self.model_type == "causal_lm")
         )
 
-        # Load model and tokenizer via ModelLoader
+        # Load model and tokenizer
         self.loader = ModelLoader(
             model_name=base_model,
             model_type=self.model_type,
@@ -84,19 +90,9 @@ class QLoRAFineTuner(FineTuner):
         self.tokenizer = self.loader.tokenizer
         self.use_gpu = self.loader.use_gpu
 
-        # Log trainable parameters
         self.model.print_trainable_parameters()
 
     def prepare_dataset(self, data_path: str) -> Dataset:
-        """
-        Prepare dataset using project-standard function.
-
-        Args:
-            data_path (str): Path to directory of prompt files.
-
-        Returns:
-            Dataset: Hugging Face Dataset with input_ids, attention_mask, labels.
-        """
         self.logger.info("Preparing dataset from %s", data_path)
         return prepare_tokenized_dataset(
             input_path=data_path,
@@ -116,26 +112,12 @@ class QLoRAFineTuner(FineTuner):
         logging_steps: int = 10,
         save_strategy: str = "epoch"
     ):
-        """
-        Train the model with QLoRA or LoRA.
-
-        Args:
-            dataset (Dataset): Training dataset.
-            output_dir (str): Directory to save model and logs.
-            per_device_train_batch_size (int): Batch size per device.
-            num_train_epochs (int): Number of epochs.
-            learning_rate (float): Learning rate.
-            logging_steps (int): Log every N steps.
-            save_strategy (str): Save strategy (e.g., "epoch").
-        """
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-        # Optimizer
         optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
 
-        # Training arguments
         training_args = TrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=per_device_train_batch_size,
@@ -144,11 +126,11 @@ class QLoRAFineTuner(FineTuner):
             logging_steps=logging_steps,
             save_strategy=save_strategy,
             report_to="none",
-            fp16=self.use_gpu and not self.loader.use_xpu,  # FP16 for CUDA only
-            bf16=self.loader.use_xpu,  # BF16 for Intel ARC
+            fp16=self.use_gpu and not self.loader.use_xpu,
+            bf16=self.loader.use_xpu,
             remove_unused_columns=False,
             optim=optim_name,
-            gradient_checkpointing=self.use_gpu,
+            gradient_checkpointing=False,
             logging_dir=str(output_path / "logs"),
             save_total_limit=1,
             max_grad_norm=0.3,
@@ -157,7 +139,6 @@ class QLoRAFineTuner(FineTuner):
             gradient_accumulation_steps=4
         )
 
-        # Trainer
         trainer = Trainer(
             model=self.model,
             args=training_args,
@@ -165,7 +146,6 @@ class QLoRAFineTuner(FineTuner):
             data_collator=lambda features: data_collator(features, logger=self.logger, model_type=self.model_type)
         )
 
-        # Gradient verification
         try:
             self.logger.info("Verifying gradient connectivity...")
             test_input = next(iter(trainer.get_train_dataloader()))
@@ -188,7 +168,6 @@ class QLoRAFineTuner(FineTuner):
             self.logger.error(f"Gradient verification failed: {str(e)}")
             raise
 
-        # Memory logging
         try:
             import psutil
             process = psutil.Process(os.getpid())
@@ -196,33 +175,31 @@ class QLoRAFineTuner(FineTuner):
         except ImportError:
             self.logger.warning("psutil not installed; memory logging disabled")
 
-        # Train
         self.model.config.use_cache = False
         self.model.train()
         trainer.train()
 
-        # Final memory logging
         if 'psutil' in locals():
             self.logger.info(f"Final memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
 
-        # Save model
         self.model.save_pretrained(output_dir)
         self.tokenizer.save_pretrained(output_dir)
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    with open('configs/fine_tuning/bert-italian.yaml') as file:
+    config_path = "configs/fine_tuning/marian_mt.yaml"
+    with open(config_path) as file:
         config = yaml.safe_load(file)
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
-        base_model=tuner_config.get('base_model', 'dbmdz/bert-base-italian-cased'),
-        model_type=tuner_config.get('model_type', 'masked_lm'),
+        base_model=tuner_config.get('base_model', 'Helsinki-NLP/opus-mt-it-en'),
+        model_type=tuner_config.get('model_type', 'causal_lm'),
         lora_rank=tuner_config.get('lora_rank', 8),
         lora_alpha=tuner_config.get('lora_alpha', 32),
         lora_dropout=tuner_config.get('lora_dropout', 0.05),
         target_modules=tuner_config.get('target_modules', None),
-        use_qlora=tuner_config.get('use_qlora', False),  # False for Intel ARC
+        use_qlora=tuner_config.get('use_qlora', False),
         device_map=tuner_config.get('device_map', 'auto'),
         max_length=tuner_config.get('max_length', 128),
         logger=logger
@@ -230,10 +207,10 @@ def main():
     dataset = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'])
     tuner.train(
         dataset=dataset,
-        output_dir=config['fine_tuning']['output_dir'],
+        output_dir=tuner_config.get('output_dir', 'data/outputs/models/opus-mt-it-en-v1'),
         per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
-        learning_rate=tuner_config.get('learning_rate', 1e-4),
+        learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
         logging_steps=tuner_config.get('logging_steps', 10),
         save_strategy=tuner_config.get('save_strategy', 'epoch')
     )
