@@ -17,7 +17,7 @@ class ModelLoader:
     MODEL_TYPE_MAPPING = {
         "causal_lm": AutoModelForCausalLM,
         "masked_lm": AutoModelForMaskedLM,
-        "seq2seq": AutoModelForSeq2SeqLM
+        "SEQ_2_SEQ_LM": AutoModelForSeq2SeqLM
     }
 
     def __init__(
@@ -32,7 +32,7 @@ class ModelLoader:
         train_mode: bool = False
     ):
         self.model_name = model_name
-        self.model_type = model_type.lower()
+        self.model_type = model_type
         self.use_gpu = torch.cuda.is_available() or torch.xpu.is_available()
         self.use_xpu = torch.xpu.is_available()
         self.max_length = max_length
@@ -112,6 +112,15 @@ class ModelLoader:
                 logger.error(f"Failed to load adapter from {adapter_path}: {str(e)}")
                 raise
 
+        # Check if adapters are loaded correctly
+        trainable_params = [(n, p.requires_grad) for n, p in self.model.named_parameters()]
+        print("\n--- Trainable Parameters ---")
+        for n, req_grad in trainable_params:
+            if req_grad:
+                print(f"{n}: requires_grad={req_grad}")
+        print(f"Total trainable params: {sum(x[1] for x in trainable_params)}")
+        assert any(x[1] for x in trainable_params), "No parameters require grad!"
+        
         self.model.train(train_mode)
 
         try:
