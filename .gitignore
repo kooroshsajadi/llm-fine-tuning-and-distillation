@@ -7,3 +7,4 @@ data/
 model/
 configs/
 logs/
+.venv/
