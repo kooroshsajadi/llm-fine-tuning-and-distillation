@@ -103,7 +103,7 @@ class ModelLoader:
                 param.requires_grad = "lora" in name.lower()
             self.model.print_trainable_parameters()
             trainable_params = [n for n, p in self.model.named_parameters() if p.requires_grad]
-            logger.info(f"Trainable parameters: {trainable_params}")
+            # logger.info(f"Trainable parameters: {trainable_params}")
             if not trainable_params:
                 raise RuntimeError("No trainable parameters detected after LoRA injection")
         elif adapter_path:
