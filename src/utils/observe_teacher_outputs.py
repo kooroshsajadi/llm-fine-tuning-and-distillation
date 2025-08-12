@@ -1,6 +1,6 @@
 import torch
 from src.core.model_loader import ModelLoader
-from src.data.data_preparation import TextPromptDataset
+from src.data.data_preparation import TextDataset
 import torch.nn.functional as F
 # from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -10,7 +10,7 @@ def observe_teacher_outputs(
     top_k=5
 ):
     loader = ModelLoader(model_name=model_name)
-    dataset = TextPromptDataset(prompt_file)
+    dataset = TextDataset(prompt_file)
     
     for idx in range(len(dataset)):
         prompt = dataset[idx]
