@@ -1,18 +1,17 @@
 import os
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 import torch
-import numpy as np
 from torch.utils.data import Dataset
-from transformers import AutoTokenizer
+from transformers import PreTrainedTokenizerBase
 from datasets import Dataset
 from src.utils.logging_utils import setup_logger
 
 logger = setup_logger(__name__)
 
 class TextPromptDataset(Dataset):
-    def __init__(self, input_path: str, transform: Optional[callable] = None):
+    def __init__(self, input_path: str, transform: Optional[Callable] = None):
         self.input_path = Path(input_path)
         self.transform = transform
         self.prompts = self._load_prompts()
@@ -53,7 +52,7 @@ class TextPromptDataset(Dataset):
 
 def prepare_tokenized_dataset(
     input_path: str,
-    tokenizer: AutoTokenizer,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int = 128,
     logger: Optional[logging.Logger] = None,
     model_type: str = "causal_lm"

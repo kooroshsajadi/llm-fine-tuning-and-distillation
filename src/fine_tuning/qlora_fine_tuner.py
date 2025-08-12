@@ -8,7 +8,6 @@ from datasets import Dataset
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
-import yaml
 from src.utils.logging_utils import setup_logger
 import src.utils.utils as utils
 
@@ -60,6 +59,7 @@ class QLoRAFineTuner(FineTuner):
         self.max_length = max_length
         self.use_qlora = use_qlora
 
+        # Validate model_type
         if self.model_type not in self.DEFAULT_TARGET_MODULES:
             raise ValueError(f"Unsupported model_type: {self.model_type}. Choose from {list(self.DEFAULT_TARGET_MODULES.keys())}")
 
@@ -188,7 +188,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/qlora_fine_tuner.yaml")
+    config = utils.return_config("configs/fine_tuning/marian_mt.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
