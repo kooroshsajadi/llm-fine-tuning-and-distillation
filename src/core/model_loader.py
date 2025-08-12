@@ -1,6 +1,5 @@
 from pathlib import Path
 import torch
-import logging
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForMaskedLM,
@@ -47,9 +46,11 @@ class ModelLoader:
             )
         else:
             self.device = torch.device(device_map)
+        logger.info(f"Using device: {self.device}")
+
         self.use_fp16 = self.use_gpu and not use_qlora and not self.use_xpu
         self.dtype = torch.float16 if self.use_fp16 else torch.bfloat16 if self.use_xpu else torch.float32
-        logger.info(f"Using {'XPU' if self.use_xpu else 'CUDA' if torch.cuda.is_available() else 'CPU'} with dtype {self.dtype}")
+        logger.info(f"Using dtype: {self.dtype}")
 
         bnb_config = None
         if use_qlora:
