@@ -10,6 +10,7 @@ from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
 import yaml
 from src.utils.logging_utils import setup_logger
+import src.utils.utils as utils
 
 # Logging setup
 logger = setup_logger(__name__)
@@ -187,9 +188,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config_path = "configs/fine_tuning/marian_mt.yaml"
-    with open(config_path) as file:
-        config = yaml.safe_load(file)
+    config = utils.return_config("configs/fine_tuning/qlora_fine_tuner.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
