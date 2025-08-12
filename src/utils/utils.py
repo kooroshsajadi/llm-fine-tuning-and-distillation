@@ -1,7 +1,9 @@
 import logging
 from pathlib import Path
+from typing import Iterator
 from typing import Optional, Any, Iterable, List
 from transformers import PreTrainedModel, TrainerCallback
+import yaml
 
 def sha256sum(filename: Path) -> str:
     """Compute SHA-256 checksum of a file."""
@@ -68,7 +70,10 @@ def generate_checksum(output_dir: str) -> None:
             with open(file_path.with_suffix(file_path.suffix + '.sha256'), 'w') as f:
                 f.write(checksum)
 
-from typing import Iterator
+def return_config(file_path: str) -> Any:
+    with open(file_path) as file:
+        config = yaml.safe_load(file)
+    return config
 
 def batch_iterable(iterable: Iterable, batch_size: int) -> Iterator[List[Any]]:
     """
