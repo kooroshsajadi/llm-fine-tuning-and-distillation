@@ -1,30 +1,29 @@
-import os
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import torch
 from torch.utils.data import Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, TensorType
 from datasets import Dataset
 from src.utils.logging_utils import setup_logger
 
 logger = setup_logger(__name__)
 
-class TextPromptDataset(Dataset):
+class TextDataset(Dataset):
     def __init__(self, input_path: str, transform: Optional[Callable] = None):
         self.input_path = Path(input_path)
         self.transform = transform
-        self.prompts = self._load_prompts()
-    
-    def _load_prompts(self) -> List[str]:
-        prompts = []
+        self.texts = self._load_texts()
+
+    def _load_texts(self) -> List[str]:
+        texts = []
         if self.input_path.is_file() and self.input_path.suffix == '.txt':
             with open(self.input_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     clean_line = line.strip()
                     if clean_line:
-                        prompts.append(clean_line)
-            logger.info(f"Loaded {len(prompts)} prompts from {self.input_path}")
+                        texts.append(clean_line)
+            logger.info(f"Loaded {len(texts)} texts from {self.input_path}")
         elif self.input_path.is_dir():
             txt_files = sorted(self.input_path.glob("*.txt"))
             if not txt_files:
@@ -33,22 +32,22 @@ class TextPromptDataset(Dataset):
                 with open(txt_file, 'r', encoding='utf-8') as f:
                     content = f.read().strip()
                     if content:
-                        prompts.append(content)
-            logger.info(f"Loaded {len(prompts)} prompts from {len(txt_files)} files in {self.input_path}")
+                        texts.append(content)
+            logger.info(f"Loaded {len(texts)} texts from {len(txt_files)} files in {self.input_path}")
         else:
             raise ValueError(f"Invalid input path: {self.input_path}")
-        if not prompts:
-            raise ValueError(f"No valid prompts found in {self.input_path}")
-        return prompts
+        if not texts:
+            raise ValueError(f"No valid texts found in {self.input_path}")
+        return texts
 
     def __len__(self):
-        return len(self.prompts)
+        return len(self.texts)
 
     def __getitem__(self, idx):
-        prompt = self.prompts[idx]
+        text = self.texts[idx]
         if self.transform:
-            prompt = self.transform(prompt)
-        return prompt
+            text = self.transform(text)
+        return text
 
 def prepare_tokenized_dataset(
     input_path: str,
@@ -61,22 +60,23 @@ def prepare_tokenized_dataset(
         logger = setup_logger(__name__)
 
     logger.info(f"Preparing dataset from {input_path} for {model_type}")
-    prompt_dataset = TextPromptDataset(input_path, transform=None)
-    prompts = prompt_dataset.prompts
+    prompt_dataset = TextDataset(input_path, transform=None)
+    texts = prompt_dataset.texts
 
-    if len(prompts) == 0:
-        raise ValueError("No valid prompts in dataset")
-    if len(prompts) < 4:
-        logger.warning(f"Dataset size ({len(prompts)}) is smaller than typical batch size (4)")
+    if len(texts) == 0:
+        raise ValueError("No valid texts in dataset")
+    if len(texts) < 4:
+        logger.warning(f"Dataset size ({len(texts)}) is smaller than typical batch size (4)")
 
     try:
+        # The exact tokenization strategy varies based on model type.
         if model_type == "masked_lm":
             tokenized = tokenizer(
-                prompts,
+                texts,
                 padding='max_length',
                 truncation=True,
                 max_length=max_length,
-                return_tensors="pt",
+                return_tensors=TensorType.PYTORCH,
                 return_special_tokens_mask=True
             )
             labels = tokenized['input_ids'].clone()
@@ -86,25 +86,28 @@ def prepare_tokenized_dataset(
             masked_indices = torch.bernoulli(probability_matrix).bool()
             labels[~masked_indices] = -100
             labels[masked_indices] = tokenized['input_ids'][masked_indices]
-        elif model_type == "seq2seq":
+            logger.info(f"Tokenizer selected for model type {model_type}.")
+        elif model_type == "SEQ_2_SEQ_LM":
             tokenized = tokenizer(
-                prompts,
+                texts,
                 padding='max_length',
                 truncation=True,
                 max_length=max_length,
-                return_tensors="pt"
+                return_tensors=TensorType.PYTORCH
             )
             labels = tokenized['input_ids'].clone()
             labels[labels == tokenizer.pad_token_id] = -100
+            logger.info(f"Tokenizer selected for model type {model_type}.")
         else:
             tokenized = tokenizer(
-                prompts,
+                texts,
                 padding='max_length',
                 truncation=True,
                 max_length=max_length,
-                return_tensors="pt"
+                return_tensors=TensorType.PYTORCH
             )
             labels = tokenized['input_ids'].clone()
+            logger.info("Tokenizer selected for miscellaneous model type.")
 
         dataset = Dataset.from_dict({
             'input_ids': tokenized['input_ids'],
