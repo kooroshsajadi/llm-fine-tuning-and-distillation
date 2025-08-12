@@ -206,7 +206,7 @@ def main():
     dataset = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'])
     tuner.train(
         dataset=dataset,
-        output_dir=tuner_config.get('output_dir', 'data/outputs/models/opus-mt-it-en-v1'),
+        output_dir=tuner_config.get('output_dir', 'models/fine_tuned_models/opus-mt-it-en-v1'),
         per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
         learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
