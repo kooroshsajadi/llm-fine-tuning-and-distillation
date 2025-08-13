@@ -1,191 +1,143 @@
-import os
 import logging
-import torch
-import numpy as np
-from torch.utils.data import Dataset
-from typing import Optional, List, Dict, Any
-from transformers import AutoTokenizer
-from datasets import Dataset
 from pathlib import Path
+from typing import Optional, List, Dict, Any, Callable
+import torch
+from torch.utils.data import Dataset
+from transformers import PreTrainedTokenizerBase, TensorType
+from datasets import Dataset
+from src.utils.logging_utils import setup_logger
 
-class TextPromptDataset(Dataset):
-    def __init__(self, file_path: str, transform: Optional[callable] = None):
-        self.file_path = file_path
+logger = setup_logger(__name__)
+
+class TextDataset(Dataset):
+    def __init__(self, input_path: str, transform: Optional[Callable] = None):
+        self.input_path = Path(input_path)
         self.transform = transform
-        self.prompts = self._load_prompts(file_path)
-    
-    def _load_prompts(self, file_path: str) -> List[str]:
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
-        prompts = []
-        with open(file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                clean_line = line.strip()
-                if clean_line:
-                    prompts.append(clean_line)
-        return prompts
+        self.texts = self._load_texts()
+
+    def _load_texts(self) -> List[str]:
+        texts = []
+        if self.input_path.is_file() and self.input_path.suffix == '.txt':
+            with open(self.input_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    clean_line = line.strip()
+                    if clean_line:
+                        texts.append(clean_line)
+            logger.info(f"Loaded {len(texts)} texts from {self.input_path}")
+        elif self.input_path.is_dir():
+            txt_files = sorted(self.input_path.glob("*.txt"))
+            if not txt_files:
+                raise FileNotFoundError(f"No .txt files found in {self.input_path}")
+            for txt_file in txt_files:
+                with open(txt_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    if content:
+                        texts.append(content)
+            logger.info(f"Loaded {len(texts)} texts from {len(txt_files)} files in {self.input_path}")
+        else:
+            raise ValueError(f"Invalid input path: {self.input_path}")
+        if not texts:
+            raise ValueError(f"No valid texts found in {self.input_path}")
+        return texts
 
     def __len__(self):
-        return len(self.prompts)
+        return len(self.texts)
 
     def __getitem__(self, idx):
-        prompt = self.prompts[idx]
+        text = self.texts[idx]
         if self.transform:
-            prompt = self.transform(prompt)
-        return prompt
+            text = self.transform(text)
+        return text
 
 def prepare_tokenized_dataset(
-    file_path: str,
-    tokenizer: AutoTokenizer,
+    input_path: str,
+    tokenizer: PreTrainedTokenizerBase,
     max_length: int = 128,
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    model_type: str = "causal_lm"
 ) -> Dataset:
-    """
-    Prepare a tokenized dataset for fine-tuning.
-
-    Args:
-        file_path (str): Path to the prompt file.
-        tokenizer (AutoTokenizer): Tokenizer for processing prompts.
-        max_length (int): Maximum sequence length for tokenization.
-        logger (logging.Logger, optional): Logger for info and warnings.
-
-    Returns:
-        Dataset: Hugging Face Dataset with input_ids, attention_mask, and labels.
-    """
     if logger is None:
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        logger = logging.getLogger(__name__)
+        logger = setup_logger(__name__)
 
-    prompt_dataset = TextPromptDataset(file_path, transform=None)
-    prompts = prompt_dataset.prompts
+    logger.info(f"Preparing dataset from {input_path} for {model_type}")
+    prompt_dataset = TextDataset(input_path, transform=None)
+    texts = prompt_dataset.texts
 
-    if len(prompts) == 0:
-        raise ValueError("No valid prompts in dataset")
-    if len(prompts) < 4:
-        logger.warning(f"Dataset size ({len(prompts)}) is smaller than typical batch size (4)")
-
-    tokenized = tokenizer(
-        prompts,
-        padding='max_length',
-        truncation=True,
-        max_length=max_length,
-        return_tensors="pt"
-    )
-
-    dataset = Dataset.from_dict({
-        'input_ids': tokenized['input_ids'],
-        'attention_mask': tokenized['attention_mask'],
-        'labels': tokenized['input_ids'].clone()
-    })
-    logger.info(f"Dataset prepared with {len(dataset)} examples")
-    return dataset
-
-def load_kd_dataset(
-    prompt_file: str,
-    logits_dir: str,
-    tokenizer: AutoTokenizer,
-    max_length: int = 128,
-    logger: Optional[logging.Logger] = None
-) -> Dataset:
-    """
-    Load a dataset for knowledge distillation, including teacher logits.
-
-    Args:
-        prompt_file (str): Path to the prompt file.
-        logits_dir (str): Directory containing teacher logits (.npy files).
-        tokenizer (AutoTokenizer): Tokenizer for processing prompts.
-        max_length (int): Maximum sequence length for tokenization.
-        logger (logging.Logger, optional): Logger for info and warnings.
-
-    Returns:
-        Dataset: Hugging Face Dataset with input_ids, attention_mask, labels, and teacher_logits.
-    """
-    if logger is None:
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        logger = logging.getLogger(__name__)
-
-    # Load prompts and tokenize
-    prompt_dataset = TextPromptDataset(prompt_file, transform=None)
-    prompts = prompt_dataset.prompts
-
-    if len(prompts) == 0:
-        raise ValueError("No valid prompts in dataset")
-    if len(prompts) < 4:
-        logger.warning(f"Dataset size ({len(prompts)}) is smaller than typical batch size (4)")
-
-    tokenized = tokenizer(
-        prompts,
-        padding='max_length',
-        truncation=True,
-        max_length=max_length,
-        return_tensors="pt"
-    )
-
-    # Load teacher logits
-    logits_dir = Path(logits_dir)
-    logit_files = sorted(logits_dir.glob("logits_batch*.npy"))
-    if not logit_files:
-        raise FileNotFoundError(f"No logit files found in {logits_dir}")
-
-    teacher_logits = []
-    expected_vocab_size = tokenizer.vocab_size
-    for logit_file in logit_files:
-        logits = np.load(logit_file)
-        logits_tensor = torch.tensor(logits, dtype=torch.float32)
-        if logits_tensor.size(1) != max_length or logits_tensor.size(2) != expected_vocab_size:
-            logger.error(f"Invalid logits shape in {logit_file}: {logits_tensor.shape}, expected [batch, {max_length}, {expected_vocab_size}]")
-            raise ValueError(f"Invalid logits shape in {logit_file}")
-        teacher_logits.append(logits_tensor)
+    if len(texts) == 0:
+        raise ValueError("No valid texts in dataset")
+    if len(texts) < 4:
+        logger.warning(f"Dataset size ({len(texts)}) is smaller than typical batch size (4)")
 
     try:
-        teacher_logits = torch.cat(teacher_logits, dim=0)
-    except RuntimeError as e:
-        logger.error(f"Failed to concatenate logits: {str(e)}")
-        for idx, t in enumerate(teacher_logits):
-            logger.error(f"Logits tensor {idx} shape: {t.shape}")
+        # The exact tokenization strategy varies based on model type.
+        if model_type == "masked_lm":
+            tokenized = tokenizer(
+                texts,
+                padding='max_length',
+                truncation=True,
+                max_length=max_length,
+                return_tensors=TensorType.PYTORCH,
+                return_special_tokens_mask=True
+            )
+            labels = tokenized['input_ids'].clone()
+            special_tokens_mask = tokenized['special_tokens_mask'].bool()
+            probability_matrix = torch.full(labels.shape, 0.15)
+            probability_matrix.masked_fill_(special_tokens_mask, 0.0)
+            masked_indices = torch.bernoulli(probability_matrix).bool()
+            labels[~masked_indices] = -100
+            labels[masked_indices] = tokenized['input_ids'][masked_indices]
+            logger.info(f"Tokenizer selected for model type {model_type}.")
+        elif model_type == "SEQ_2_SEQ_LM":
+            tokenized = tokenizer(
+                texts,
+                padding='max_length',
+                truncation=True,
+                max_length=max_length,
+                return_tensors=TensorType.PYTORCH
+            )
+            labels = tokenized['input_ids'].clone()
+            labels[labels == tokenizer.pad_token_id] = -100
+            logger.info(f"Tokenizer selected for model type {model_type}.")
+        else:
+            tokenized = tokenizer(
+                texts,
+                padding='max_length',
+                truncation=True,
+                max_length=max_length,
+                return_tensors=TensorType.PYTORCH
+            )
+            labels = tokenized['input_ids'].clone()
+            logger.info("Tokenizer selected for miscellaneous model type.")
+
+        dataset = Dataset.from_dict({
+            'input_ids': tokenized['input_ids'],
+            'attention_mask': tokenized['attention_mask'],
+            'labels': labels
+        })
+        logger.info(f"Dataset prepared with {len(dataset)} examples")
+        return dataset
+    except Exception as e:
+        logger.error(f"Tokenization failed: {str(e)}")
         raise
-
-    if len(teacher_logits) != len(prompts):
-        raise ValueError(f"Mismatch between prompts ({len(prompts)}) and teacher logits ({len(teacher_logits)})")
-
-    dataset = Dataset.from_dict({
-        'input_ids': tokenized['input_ids'],
-        'attention_mask': tokenized['attention_mask'],
-        'labels': tokenized['input_ids'].clone(),
-        'teacher_logits': teacher_logits
-    })
-    logger.info(f"KD dataset prepared with {len(dataset)} examples")
-    return dataset
 
 def data_collator(
     features: List[Dict[str, Any]],
-    logger: Optional[logging.Logger] = None
+    logger: Optional[logging.Logger] = None,
+    model_type: str = "causal_lm"
 ) -> Dict[str, torch.Tensor]:
     """
     Collate dataset features into a batch for training.
 
     Args:
-        features (List[Dict[str, Any]]): List of feature dictionaries with input_ids, attention_mask, labels, and optionally teacher_logits.
-        logger (logging.Logger, optional): Logger for debugging batch shapes.
+        features (List[Dict[str, Any]]): List of feature dictionaries.
+        logger (logging.Logger, optional): Logger for debugging.
+        model_type (str): Model type ("causal_lm" or "masked_lm").
 
     Returns:
         Dict[str, torch.Tensor]: Batched tensors for input_ids, attention_mask, labels, and teacher_logits.
     """
     if logger is None:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        logger = logging.getLogger(__name__)
+        logger = setup_logger(__name__)
 
     required_keys = ['input_ids', 'attention_mask', 'labels']
     if not all(all(key in f for key in required_keys) for f in features):

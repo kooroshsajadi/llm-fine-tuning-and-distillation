@@ -1,4 +1,4 @@
-# Distilled LLM 🚀
+# LLM Fine-Tuning and Distillation 🚀
 
 **Distilled LLM** is an under-development project focused on training and deploying lightweight, efficient large language models through **knowledge distillation** and other model compression techniques. It leverages the Hugging Face Transformers ecosystem for flexibility and modularity.
 
@@ -14,6 +14,7 @@
 - 🔧 **Flexible architecture** for experimenting with different teacher-student models.
 - 🧠 **Knowledge distillation** with logit-based supervision.
 - 🗃️ **Dataset preprocessing** with Hugging Face Datasets and tokenizers.
+- 🎯 **Fine-tuning** support for custom large language models including seq2seq architectures.
 - 📦 **Safe saving and loading** using `safetensors` format and integrity checks.
 - 🧪 **Modular design** for training, inference, and evaluation.
 
