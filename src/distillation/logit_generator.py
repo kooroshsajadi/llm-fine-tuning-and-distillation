@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from tqdm import tqdm
 from src.core.model_loader import ModelLoader
-from src.data.data_preparation import TextPromptDataset
+from src.data.data_preparation import TextDataset
 from src.utils.utils import generate_checksum, batch_iterable
 import numpy as np
 
@@ -59,7 +59,7 @@ def main(
             use_qlora=False  # Disable quantization for inference
         )
         # Load prompts
-        input_texts = TextPromptDataset("data/synthetic/prompts_v1.txt")
+        input_texts = TextDataset("data/synthetic/prompts_v1.txt")
         if len(input_texts) == 0:
             raise ValueError("No prompts found in data/synthetic/prompts_v1.txt")
 
