@@ -14,6 +14,7 @@
 - 🔧 **Flexible architecture** for experimenting with different teacher-student models.
 - 🧠 **Knowledge distillation** with logit-based supervision.
 - 🗃️ **Dataset preprocessing** with Hugging Face Datasets and tokenizers.
+- 🎯 **Fine-tuning** support for custom large language models including seq2seq architectures.
 - 📦 **Safe saving and loading** using `safetensors` format and integrity checks.
 - 🧪 **Modular design** for training, inference, and evaluation.
 
