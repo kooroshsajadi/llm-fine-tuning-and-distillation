@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizerBase, TensorType
 from datasets import Dataset
 from src.utils.logging_utils import setup_logger
+from datasets import DatasetDict
 
 logger = setup_logger(__name__)
 
@@ -48,6 +49,25 @@ class TextDataset(Dataset):
         if self.transform:
             text = self.transform(text)
         return text
+
+def split_train_val(dataset, val_ratio=0.1, seed=42):
+    """
+    Shuffle and split a Hugging Face Dataset into training and validation splits.
+
+    Args:
+        dataset (Dataset): Full dataset to split.
+        val_ratio (float): Fraction of data to keep for validation.
+        seed (int): Random seed for reproducibility.
+
+    Returns:
+        DatasetDict: Dictionary with 'train' and 'validation' keys.
+    """
+    # Shuffle the dataset
+    shuffled_dataset = dataset.shuffle(seed=seed)
+    # Split into train and validation using the test_size param as validation set size
+    split = shuffled_dataset.train_test_split(test_size=val_ratio, seed=seed)
+    # Return as DatasetDict
+    return DatasetDict({'train': split['train'], 'validation': split['test']})
 
 def prepare_tokenized_dataset(
     input_path: str,
