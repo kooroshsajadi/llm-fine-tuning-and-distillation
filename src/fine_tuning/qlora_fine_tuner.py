@@ -2,7 +2,7 @@ import logging
 import os
 import torch
 from pathlib import Path
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, EvalPrediction
 from peft import LoraConfig
 from datasets import Dataset
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
@@ -10,6 +10,8 @@ from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
 from src.utils.logging_utils import setup_logger
 import src.utils.utils as utils
+from src.data.data_preparation import split_train_val
+from datasets import DatasetDict
 
 # Logging setup
 logger = setup_logger(__name__)
@@ -93,19 +95,25 @@ class QLoRAFineTuner(FineTuner):
 
         self.model.print_trainable_parameters()
 
-    def prepare_dataset(self, data_path: str) -> Dataset:
+    def prepare_dataset(self, data_path: str, val_ratio=0.1) -> DatasetDict:
         self.logger.info("Preparing dataset from %s", data_path)
-        return prepare_tokenized_dataset(
+        full_dataset = prepare_tokenized_dataset(
             input_path=data_path,
             tokenizer=self.tokenizer,
             max_length=self.max_length,
             logger=self.logger,
             model_type=self.model_type
         )
+        # Split into train and validation sets
+        dataset_dict = split_train_val(full_dataset, val_ratio=val_ratio)
+        self.logger.info(
+            f"Dataset split: train size: {len(dataset_dict['train'])}, validation size: {len(dataset_dict['validation'])}"
+        )
+        return dataset_dict
 
     def train(
         self,
-        dataset: Dataset,
+        dataset_dict: DatasetDict,
         output_dir: str = "data/outputs/models/fine_tuned_model",
         per_device_train_batch_size: int = 1,
         num_train_epochs: int = 3,
@@ -114,7 +122,7 @@ class QLoRAFineTuner(FineTuner):
         save_strategy: str = "epoch"
     ):
         output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        output_path.mkdir(parents=True, exist_ok=True, mode=0o700) # The owner has full access but not others.
 
         optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
@@ -125,26 +133,37 @@ class QLoRAFineTuner(FineTuner):
             num_train_epochs=num_train_epochs,
             learning_rate=learning_rate,
             logging_steps=logging_steps,
-            save_strategy=save_strategy,
-            report_to="none",
-            fp16=self.use_gpu and not self.loader.use_xpu,
-            bf16=self.loader.use_xpu,
+            save_strategy=save_strategy, # When to save model checkpoints ('epoch', 'steps', etc.)
+            report_to="none", # Disable reporting to external experiment trackers
+            fp16=self.use_gpu and not self.loader.use_xpu, # Use mixed precision (float16) training if using GPU without XPU
+            bf16=self.loader.use_xpu, # Use bfloat16 precision when using XPU device
             remove_unused_columns=False,
             optim=optim_name,
             gradient_checkpointing=False,
             logging_dir=str(output_path / "logs"),
+            eval_strategy="epoch",
+            eval_accumulation_steps=2,
             save_total_limit=1,
-            max_grad_norm=0.3,
-            warmup_ratio=0.05,
-            dataloader_pin_memory=self.use_gpu,
-            gradient_accumulation_steps=4
+            max_grad_norm=0.3, # Maximum norm for gradient clipping to stabilize training
+            warmup_ratio=0.05, # Fraction of total steps for learning rate warmup at start
+            dataloader_pin_memory=self.use_gpu, # Pin memory for DataLoader for faster host-to-device transfer if using GPU
+            gradient_accumulation_steps=4 # Number of forward passes before backward update to simulate larger batch size
         )
+
+        # Define compute_metrics to log validation metrics (optional, e.g. loss)
+        def compute_metrics(eval_pred: EvalPrediction):
+            logits, labels = eval_pred.predictions, eval_pred.label_ids
+            # For seq2seq, you might compute validation loss only or specific metrics here
+            # Here, just returning dummy as example (implement your actual metric)
+            return {}
 
         trainer = Trainer(
             model=self.model,
             args=training_args,
-            train_dataset=dataset,
-            data_collator=lambda features: data_collator(features, logger=self.logger, model_type=self.model_type)
+            train_dataset=dataset_dict['train'],
+            eval_dataset=dataset_dict['validation'],
+            data_collator=lambda features: data_collator(features, logger=self.logger, model_type=self.model_type),
+            compute_metrics=compute_metrics
         )
 
         try:
@@ -203,9 +222,9 @@ def main():
         max_length=tuner_config.get('max_length', 128),
         logger=logger
     )
-    dataset = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'])
+    dataset_dict = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'], val_ratio=0.1)
     tuner.train(
-        dataset=dataset,
+        dataset_dict=dataset_dict,
         output_dir=tuner_config.get('output_dir', 'models/fine_tuned_models/opus-mt-it-en-v1'),
         per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
