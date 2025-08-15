@@ -1,5 +1,6 @@
 from evaluate import load
 import numpy as np
+import nltk
 
 class HFMetricHelper:
     """
