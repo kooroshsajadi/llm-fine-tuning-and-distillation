@@ -122,9 +122,9 @@ class QLoRAFineTuner(FineTuner):
         self,
         dataset_dict: DatasetDict,
         output_dir: str = "data/outputs/models/fine_tuned_model",
-        per_device_train_batch_size: int = 1,
+        per_device_train_batch_size: int = 2,
         per_device_eval_batch_size: int = 1,
-        num_train_epochs: int = 3,
+        num_train_epochs: int = 2,
         learning_rate: float = 1e-4,
         logging_steps: int = 10,
         save_strategy: str = "epoch"
@@ -197,8 +197,8 @@ class QLoRAFineTuner(FineTuner):
             decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
 
             # Rouge expects a newline after each sentence
-            decoded_preds = ["\n".join(nltk.sent_tokenize(pred.strip())) for pred in decoded_preds]
-            decoded_labels = ["\n".join(nltk.sent_tokenize(label.strip())) for label in decoded_labels]
+            decoded_preds = ["\n".join(nltk.sent_tokenize(pred.strip(), language='italian')) for pred in decoded_preds]
+            decoded_labels = ["\n".join(nltk.sent_tokenize(label.strip(), language='italian')) for label in decoded_labels]
 
             # Note that other metrics may not have a `use_aggregator` parameter
             # and thus will return a list, computing a metric for each sentence.
@@ -290,8 +290,8 @@ def main():
     tuner.train(
         dataset_dict=dataset_dict,
         output_dir=tuner_config.get('output_dir', 'models/fine_tuned_models/opus-mt-it-en-v1'),
-        per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
-        per_device_eval_batch_size=tuner_config.get('per_device_eval_batch_size', 1),
+        # per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
+        # per_device_eval_batch_size=tuner_config.get('per_device_eval_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
         learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
         logging_steps=tuner_config.get('logging_steps', 10),
