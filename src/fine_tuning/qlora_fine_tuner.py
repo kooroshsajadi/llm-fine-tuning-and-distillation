@@ -121,7 +121,7 @@ class QLoRAFineTuner(FineTuner):
     def train(
         self,
         dataset_dict: DatasetDict,
-        output_dir: str = "data/outputs/models/fine_tuned_model",
+        output_dir: str,
         per_device_train_batch_size: int = 2,
         per_device_eval_batch_size: int = 1,
         num_train_epochs: int = 2,
@@ -130,7 +130,7 @@ class QLoRAFineTuner(FineTuner):
         save_strategy: str = "epoch"
     ):
         output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True, mode=0o700) # The owner has full access but not others.
+        # output_path.mkdir(parents=True, exist_ok=True)
 
         optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
@@ -159,7 +159,7 @@ class QLoRAFineTuner(FineTuner):
             remove_unused_columns=False,
             optim=optim_name,
             gradient_checkpointing=False,
-            logging_dir=str(output_path / "logs"),
+            logging_dir='logs',
         )
 
         # training_args = TrainingArguments(
@@ -289,7 +289,7 @@ def main():
     dataset_dict = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'], val_ratio=0.1)
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir=tuner_config.get('output_dir', 'models/fine_tuned_models/opus-mt-it-en-v1'),
+        output_dir='models/fine_tuned_models',
         # per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
         # per_device_eval_batch_size=tuner_config.get('per_device_eval_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
