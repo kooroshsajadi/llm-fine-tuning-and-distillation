@@ -12,12 +12,13 @@ from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
 from src.utils.logging_utils import setup_logger
 import src.utils.utils as utils
-from src.data.data_preparation import split_train_val
+# from src.data.data_preparation import split_train_val
 from datasets import DatasetDict
 from src.utils.metrics_utils import HFMetricHelper
 import numpy as np
 import nltk
 from evaluate import load
+from src.data.data_preparation import prepare_dataset_dict
 
 
 # Logging setup
@@ -102,21 +103,21 @@ class QLoRAFineTuner(FineTuner):
 
         self.model.print_trainable_parameters()
 
-    def prepare_dataset(self, data_path: str, val_ratio=0.1) -> DatasetDict:
-        self.logger.info("Preparing dataset from %s", data_path)
-        full_dataset = prepare_tokenized_dataset(
-            input_path=data_path,
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-            logger=self.logger,
-            model_type=self.model_type
-        )
-        # Split into train and validation sets
-        dataset_dict = split_train_val(full_dataset, val_ratio=val_ratio)
-        self.logger.info(
-            f"Dataset split: train size: {len(dataset_dict['train'])}, validation size: {len(dataset_dict['validation'])}"
-        )
-        return dataset_dict
+    # def prepare_dataset(self, data_path: str, val_ratio=0.1) -> DatasetDict:
+    #     self.logger.info("Preparing dataset from %s", data_path)
+    #     full_dataset = prepare_tokenized_dataset(
+    #         input_path=data_path,
+    #         tokenizer=self.tokenizer,
+    #         max_length=self.max_length,
+    #         logger=self.logger,
+    #         model_type=self.model_type
+    #     )
+    #     # Split into train and validation sets
+    #     dataset_dict = split_train_val(full_dataset, val_ratio=val_ratio)
+    #     self.logger.info(
+    #         f"Dataset split: train size: {len(dataset_dict['train'])}, validation size: {len(dataset_dict['validation'])}"
+    #     )
+    #     return dataset_dict
 
     def train(
         self,
@@ -286,10 +287,15 @@ def main():
         max_length=tuner_config.get('max_length', 128),
         logger=logger
     )
-    dataset_dict = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'], val_ratio=0.1)
+
+    dataset_dict = prepare_dataset_dict(input_path=config['datasets']['prefettura_v1_texts'],
+                                        tokenizer=tuner.loader.tokenizer,
+                                        max_length=tuner_config.get('max_length', 128),
+                                        model_type=tuner_config.get('model_type', 'causal_lm'))
+    # dataset_dict = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'], val_ratio=0.1)
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='models/fine_tuned_models',
+        output_dir='models/fine_tuned_models/opus-mt-it-en-v1',
         # per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
         # per_device_eval_batch_size=tuner_config.get('per_device_eval_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
