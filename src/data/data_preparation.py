@@ -2,15 +2,21 @@ import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset as TorchDataset
 from transformers import PreTrainedTokenizerBase, TensorType
-from datasets import Dataset
+from datasets import Dataset, DatasetDict, load_dataset
 from src.utils.logging_utils import setup_logger
-from datasets import DatasetDict
 
 logger = setup_logger(__name__)
 
-class TextDataset(Dataset):
+SPLIT_CONFIG = {
+    "train_ratio": 0.8,
+    "val_ratio": 0.1,
+    "test_ratio": 0.1,
+    "seed": 42
+}
+
+class TextDataset(TorchDataset):
     def __init__(self, input_path: str, transform: Optional[Callable] = None):
         self.input_path = Path(input_path)
         self.transform = transform
@@ -20,10 +26,7 @@ class TextDataset(Dataset):
         texts = []
         if self.input_path.is_file() and self.input_path.suffix == '.txt':
             with open(self.input_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    clean_line = line.strip()
-                    if clean_line:
-                        texts.append(clean_line)
+                texts = [line.strip() for line in f if line.strip()]
             logger.info(f"Loaded {len(texts)} texts from {self.input_path}")
         elif self.input_path.is_dir():
             txt_files = sorted(self.input_path.glob("*.txt"))
@@ -50,25 +53,6 @@ class TextDataset(Dataset):
             text = self.transform(text)
         return text
 
-def split_train_val(dataset, val_ratio=0.1, seed=42):
-    """
-    Shuffle and split a Hugging Face Dataset into training and validation splits.
-
-    Args:
-        dataset (Dataset): Full dataset to split.
-        val_ratio (float): Fraction of data to keep for validation.
-        seed (int): Random seed for reproducibility.
-
-    Returns:
-        DatasetDict: Dictionary with 'train' and 'validation' keys.
-    """
-    # Shuffle the dataset
-    shuffled_dataset = dataset.shuffle(seed=seed)
-    # Split into train and validation using the test_size param as validation set size
-    split = shuffled_dataset.train_test_split(test_size=val_ratio, seed=seed)
-    # Return as DatasetDict
-    return DatasetDict({'train': split['train'], 'validation': split['test']})
-
 def prepare_tokenized_dataset(
     input_path: str,
     tokenizer: PreTrainedTokenizerBase,
@@ -89,7 +73,6 @@ def prepare_tokenized_dataset(
         logger.warning(f"Dataset size ({len(texts)}) is smaller than typical batch size (4)")
 
     try:
-        # The exact tokenization strategy varies based on model type.
         if model_type == "masked_lm":
             tokenized = tokenizer(
                 texts,
@@ -127,7 +110,7 @@ def prepare_tokenized_dataset(
                 return_tensors=TensorType.PYTORCH
             )
             labels = tokenized['input_ids'].clone()
-            logger.info("Tokenizer selected for miscellaneous model type.")
+            logger.info(f"Tokenizer selected for miscellaneous model type.")
 
         dataset = Dataset.from_dict({
             'input_ids': tokenized['input_ids'],
@@ -145,17 +128,6 @@ def data_collator(
     logger: Optional[logging.Logger] = None,
     model_type: str = "causal_lm"
 ) -> Dict[str, torch.Tensor]:
-    """
-    Collate dataset features into a batch for training.
-
-    Args:
-        features (List[Dict[str, Any]]): List of feature dictionaries.
-        logger (logging.Logger, optional): Logger for debugging.
-        model_type (str): Model type ("causal_lm" or "masked_lm").
-
-    Returns:
-        Dict[str, torch.Tensor]: Batched tensors for input_ids, attention_mask, labels, and teacher_logits.
-    """
     if logger is None:
         logger = setup_logger(__name__)
 
@@ -174,3 +146,50 @@ def data_collator(
     logger.debug(f"Batch shapes: input_ids={batch['input_ids'].shape}, attention_mask={batch['attention_mask'].shape}, labels={batch['labels'].shape}" +
                  (f", teacher_logits={batch['teacher_logits'].shape}" if 'teacher_logits' in batch else ""))
     return batch
+
+def prepare_dataset_dict(
+    input_path: str,
+    tokenizer: PreTrainedTokenizerBase,
+    max_length: int = 128,
+    model_type: str = "causal_lm",
+    split_config: Optional[Dict[str, Any]] = None,
+    logger: Optional[logging.Logger] = None
+) -> DatasetDict:
+    """
+    Prepare and split into train/validation/test sets using ratios and seed in SPLIT_CONFIG.
+    Always returns reproducible splits given the same SPLIT_CONFIG and input.
+    """
+    if logger is None:
+        logger = setup_logger(__name__)
+    cfg = split_config or SPLIT_CONFIG
+
+    logger.info(f"Splitting dataset using config: {cfg}")
+    # Tokenize all texts first
+    full_dataset = prepare_tokenized_dataset(
+        input_path,
+        tokenizer,
+        max_length=max_length,
+        logger=logger,
+        model_type=model_type
+    )
+    # Shuffle deterministically
+    full_dataset = full_dataset.shuffle(seed=cfg["seed"])
+    # First: Train/Test split
+    train_test = full_dataset.train_test_split(test_size=cfg["test_ratio"], seed=cfg["seed"])
+    train = train_test['train']
+    test = train_test['test']
+    # Second: Train/Val split within the train set
+    train_val = train.train_test_split(test_size=cfg["val_ratio"] / (1.0 - cfg["test_ratio"]), seed=cfg["seed"])
+    train = train_val["train"]
+    val = train_val["test"]
+    split_dict = DatasetDict({
+        "train": train,
+        "validation": val,
+        "test": test
+    })
+    logger.info(f"Split sizes: train={len(split_dict['train'])}, val={len(split_dict['validation'])}, test={len(split_dict['test'])}")
+    return split_dict
+
+# Example usage in scripts:
+# from src.data.data_preparation import prepare_dataset_dict, SPLIT_CONFIG
+# dataset_dict = prepare_dataset_dict("data/all_texts/", tokenizer, max_length=128)
