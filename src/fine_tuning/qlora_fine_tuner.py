@@ -12,7 +12,6 @@ from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
 from src.utils.logging_utils import setup_logger
 import src.utils.utils as utils
-# from src.data.data_preparation import split_train_val
 from datasets import DatasetDict
 from src.utils.metrics_utils import HFMetricHelper
 import numpy as np
@@ -103,22 +102,6 @@ class QLoRAFineTuner(FineTuner):
 
         self.model.print_trainable_parameters()
 
-    # def prepare_dataset(self, data_path: str, val_ratio=0.1) -> DatasetDict:
-    #     self.logger.info("Preparing dataset from %s", data_path)
-    #     full_dataset = prepare_tokenized_dataset(
-    #         input_path=data_path,
-    #         tokenizer=self.tokenizer,
-    #         max_length=self.max_length,
-    #         logger=self.logger,
-    #         model_type=self.model_type
-    #     )
-    #     # Split into train and validation sets
-    #     dataset_dict = split_train_val(full_dataset, val_ratio=val_ratio)
-    #     self.logger.info(
-    #         f"Dataset split: train size: {len(dataset_dict['train'])}, validation size: {len(dataset_dict['validation'])}"
-    #     )
-    #     return dataset_dict
-
     def train(
         self,
         dataset_dict: DatasetDict,
@@ -130,8 +113,6 @@ class QLoRAFineTuner(FineTuner):
         logging_steps: int = 10,
         save_strategy: str = "epoch"
     ):
-        output_path = Path(output_dir)
-        # output_path.mkdir(parents=True, exist_ok=True)
 
         optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
@@ -163,31 +144,6 @@ class QLoRAFineTuner(FineTuner):
             logging_dir='logs',
         )
 
-        # training_args = TrainingArguments(
-        #     output_dir=output_dir,
-        #     per_device_train_batch_size=per_device_train_batch_size,
-        #     num_train_epochs=num_train_epochs,
-        #     learning_rate=learning_rate,
-        #     logging_steps=logging_steps,
-        #     save_strategy=save_strategy, # When to save model checkpoints ('epoch', 'steps', etc.)
-        #     report_to="none", # Disable reporting to external experiment trackers
-        #     fp16=self.use_gpu and not self.loader.use_xpu, # Use mixed precision (float16) training if using GPU without XPU
-        #     bf16=self.loader.use_xpu, # Use bfloat16 precision when using XPU device
-        #     remove_unused_columns=False,
-        #     optim=optim_name,
-        #     gradient_checkpointing=False,
-        #     logging_dir=str(output_path / "logs"),
-        #     eval_strategy="epoch",
-        #     eval_accumulation_steps=2,
-        #     save_total_limit=1,
-        #     predic=True,
-        #     max_grad_norm=0.3, # Maximum norm for gradient clipping to stabilize training
-        #     warmup_ratio=0.05, # Fraction of total steps for learning rate warmup at start
-        #     dataloader_pin_memory=self.use_gpu, # Pin memory for DataLoader for faster host-to-device transfer if using GPU
-        #     gradient_accumulation_steps=4 # Number of forward passes before backward update to simulate larger batch size
-        # )
-
-        # metric_helper = HFMetricHelper(tokenizer=self.tokenizer)
         metric = load("rouge")
         
         def compute_metrics(eval_pred):
@@ -221,15 +177,6 @@ class QLoRAFineTuner(FineTuner):
             data_collator=lambda features: DataCollatorForSeq2Seq(self.tokenizer, model=self.model)(features),
             compute_metrics=compute_metrics
         )
-
-        # trainer = Trainer(
-        #     model=self.model,
-        #     args=training_args,
-        #     train_dataset=dataset_dict['train'],
-        #     eval_dataset=dataset_dict['validation'],
-        #     data_collator=lambda features: data_collator(features, logger=self.logger, model_type=self.model_type),
-        #     compute_metrics=metric_helper.compute
-        # )
 
         try:
             self.logger.info("Verifying gradient connectivity...")
@@ -267,8 +214,11 @@ class QLoRAFineTuner(FineTuner):
         if 'psutil' in locals():
             self.logger.info(f"Final memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
 
-        self.model.save_pretrained(output_dir)
-        self.tokenizer.save_pretrained(output_dir)
+        model_dir = Path(output_dir) / "model"
+        tok_dir = Path(output_dir) / "tokenizer"
+
+        self.model.save_pretrained(model_dir)
+        self.tokenizer.save_pretrained(tok_dir)
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
@@ -292,12 +242,10 @@ def main():
                                         tokenizer=tuner.loader.tokenizer,
                                         max_length=tuner_config.get('max_length', 128),
                                         model_type=tuner_config.get('model_type', 'causal_lm'))
-    # dataset_dict = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'], val_ratio=0.1)
+    
     tuner.train(
         dataset_dict=dataset_dict,
         output_dir='models/fine_tuned_models/opus-mt-it-en-v1',
-        # per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
-        # per_device_eval_batch_size=tuner_config.get('per_device_eval_batch_size', 1),
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
         learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
         logging_steps=tuner_config.get('logging_steps', 10),
