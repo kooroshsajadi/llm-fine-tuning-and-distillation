@@ -15,6 +15,7 @@
 - 🧠 **Knowledge distillation** with logit-based supervision.
 - 🗃️ **Dataset preprocessing** with Hugging Face Datasets and tokenizers.
 - 🎯 **Fine-tuning** support for custom large language models including seq2seq architectures.
+- 📊 **Comprehensive Evaluation** with metrics specially implemented for seq2seq models, including ROUGE, BLEU, and BERTScore to provide robust semantic and lexical quality assessment.
 - 📦 **Safe saving and loading** using `safetensors` format and integrity checks.
 - 🧪 **Modular design** for training, inference, and evaluation.
 
