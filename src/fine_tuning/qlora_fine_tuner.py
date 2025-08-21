@@ -2,7 +2,9 @@ import logging
 import os
 import torch
 from pathlib import Path
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, EvalPrediction
+from transformers import AutoModelForSeq2SeqLM, DataCollatorForSeq2Seq, Seq2SeqTrainingArguments, Seq2SeqTrainer
+from transformers.trainer_utils import IntervalStrategy
 from peft import LoraConfig
 from datasets import Dataset
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
@@ -10,6 +12,13 @@ from src.core.model_loader import ModelLoader
 from src.fine_tuning.fine_tuner import FineTuner
 from src.utils.logging_utils import setup_logger
 import src.utils.utils as utils
+from datasets import DatasetDict
+from src.utils.metrics_utils import HFMetricHelper
+import numpy as np
+import nltk
+from evaluate import load
+from src.data.data_preparation import prepare_dataset_dict
+
 
 # Logging setup
 logger = setup_logger(__name__)
@@ -88,68 +97,68 @@ class QLoRAFineTuner(FineTuner):
             train_mode=True
         )
         self.model = self.loader.model
+        self.loader._log_model_profile("Base model loaded")
         self.tokenizer = self.loader.tokenizer
         self.use_gpu = self.loader.use_gpu
 
         self.model.print_trainable_parameters()
 
-    def prepare_dataset(self, data_path: str) -> Dataset:
-        self.logger.info("Preparing dataset from %s", data_path)
-        return prepare_tokenized_dataset(
-            input_path=data_path,
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-            logger=self.logger,
-            model_type=self.model_type
-        )
-
     def train(
         self,
-        dataset: Dataset,
-        output_dir: str = "data/outputs/models/fine_tuned_model",
-        per_device_train_batch_size: int = 1,
-        num_train_epochs: int = 3,
+        dataset_dict: DatasetDict,
+        output_dir: str,
+        per_device_train_batch_size: int = 2,
+        per_device_eval_batch_size: int = 1,
+        num_train_epochs: int = 2,
         learning_rate: float = 1e-4,
         logging_steps: int = 10,
         save_strategy: str = "epoch"
     ):
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
 
-        training_args = TrainingArguments(
+        training_args = Seq2SeqTrainingArguments(
             output_dir=output_dir,
             per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
             num_train_epochs=num_train_epochs,
             learning_rate=learning_rate,
             logging_steps=logging_steps,
             save_strategy=save_strategy,
+            eval_strategy=IntervalStrategy.EPOCH,
+            predict_with_generate=True,
+            generation_max_length=128,
+            eval_accumulation_steps=2,
+            generation_num_beams=4, # For beam search decoding
             report_to="none",
             fp16=self.use_gpu and not self.loader.use_xpu,
             bf16=self.loader.use_xpu,
+            save_total_limit=1,
+            dataloader_pin_memory=self.use_gpu,
+            gradient_accumulation_steps=4,
+            max_grad_norm=0.3,
+            warmup_ratio=0.05,
             remove_unused_columns=False,
             optim=optim_name,
             gradient_checkpointing=False,
-            logging_dir=str(output_path / "logs"),
-            save_total_limit=1,
-            max_grad_norm=0.3,
-            warmup_ratio=0.05,
-            dataloader_pin_memory=self.use_gpu,
-            gradient_accumulation_steps=4
+            logging_dir='logs',
         )
 
-        trainer = Trainer(
+        metric_helper = HFMetricHelper(tokenizer=self.tokenizer, bertscore_model_type="bert-base-multilingual-cased")
+
+        seq2seq_trainer = Seq2SeqTrainer(
             model=self.model,
             args=training_args,
-            train_dataset=dataset,
-            data_collator=lambda features: data_collator(features, logger=self.logger, model_type=self.model_type)
+            train_dataset=dataset_dict['train'],
+            eval_dataset=dataset_dict['validation'],
+            data_collator=lambda features: DataCollatorForSeq2Seq(self.tokenizer, model=self.model)(features),
+            compute_metrics=metric_helper.compute
         )
 
         try:
             self.logger.info("Verifying gradient connectivity...")
-            test_input = next(iter(trainer.get_train_dataloader()))
+            test_input = next(iter(seq2seq_trainer.get_train_dataloader()))
             test_input = {k: v.to(self.model.device) for k, v in test_input.items()}
             with torch.set_grad_enabled(True):
                 self.model.zero_grad()
@@ -178,13 +187,16 @@ class QLoRAFineTuner(FineTuner):
 
         self.model.config.use_cache = False
         self.model.train()
-        trainer.train()
+        seq2seq_trainer.train()
 
         if 'psutil' in locals():
             self.logger.info(f"Final memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
 
-        self.model.save_pretrained(output_dir)
-        self.tokenizer.save_pretrained(output_dir)
+        model_dir = Path(output_dir) / "model"
+        tok_dir = Path(output_dir) / "tokenizer"
+
+        self.model.save_pretrained(model_dir)
+        self.tokenizer.save_pretrained(tok_dir)
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
@@ -203,11 +215,15 @@ def main():
         max_length=tuner_config.get('max_length', 128),
         logger=logger
     )
-    dataset = tuner.prepare_dataset(config['datasets']['prefettura_v1_texts'])
+
+    dataset_dict = prepare_dataset_dict(input_path=config['datasets']['prefettura_v1_texts'],
+                                        tokenizer=tuner.loader.tokenizer,
+                                        max_length=tuner_config.get('max_length', 128),
+                                        model_type=tuner_config.get('model_type', 'causal_lm'))
+    
     tuner.train(
-        dataset=dataset,
-        output_dir=tuner_config.get('output_dir', 'models/fine_tuned_models/opus-mt-it-en-v1'),
-        per_device_train_batch_size=tuner_config.get('per_device_train_batch_size', 1),
+        dataset_dict=dataset_dict,
+        output_dir='models/fine_tuned_models/opus-mt-it-en-v1',
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
         learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
         logging_steps=tuner_config.get('logging_steps', 10),
