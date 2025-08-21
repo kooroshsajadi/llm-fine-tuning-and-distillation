@@ -14,18 +14,18 @@ class FineTuner(ABC):
         """
         self.logger = logger
 
-    @abstractmethod
-    def prepare_dataset(self, data_path: str) -> Dataset:
-        """
-        Prepare dataset for fine-tuning.
+    # @abstractmethod
+    # def prepare_dataset(self, data_path: str) -> Dataset:
+    #     """
+    #     Prepare dataset for fine-tuning.
 
-        Args:
-            data_path (str): Path to the training data file.
+    #     Args:
+    #         data_path (str): Path to the training data file.
 
-        Returns:
-            Dataset: Tokenized dataset ready for training.
-        """
-        pass
+    #     Returns:
+    #         Dataset: Tokenized dataset ready for training.
+    #     """
+    #     pass
 
     @abstractmethod
     def train(
