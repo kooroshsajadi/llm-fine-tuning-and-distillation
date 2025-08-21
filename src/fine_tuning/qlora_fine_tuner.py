@@ -145,30 +145,7 @@ class QLoRAFineTuner(FineTuner):
             logging_dir='logs',
         )
 
-        metric = load("rouge")
-        
-        def compute_metrics(eval_pred):
-            predictions, labels = eval_pred
-            decoded_preds = self.tokenizer.batch_decode(predictions, skip_special_tokens=True)
-            # Replace -100 in the labels as we can't decode them.
-            labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
-            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-            # Rouge expects a newline after each sentence
-            decoded_preds = ["\n".join(nltk.sent_tokenize(pred.strip(), language='italian')) for pred in decoded_preds]
-            decoded_labels = ["\n".join(nltk.sent_tokenize(label.strip(), language='italian')) for label in decoded_labels]
-
-            # Note that other metrics may not have a `use_aggregator` parameter
-            # and thus will return a list, computing a metric for each sentence.
-            result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True, use_aggregator=True)
-            # Extract a few results
-            result = {key: value * 100 for key, value in result.items()}
-
-            # Add mean generated length
-            prediction_lens = [np.count_nonzero(pred != self.tokenizer.pad_token_id) for pred in predictions]
-            result["gen_len"] = np.mean(prediction_lens)
-
-            return {k: round(v, 4) for k, v in result.items()}
+        metric_helper = HFMetricHelper(tokenizer=self.tokenizer, bertscore_model_type="bert-base-multilingual-cased")
 
         seq2seq_trainer = Seq2SeqTrainer(
             model=self.model,
@@ -176,7 +153,7 @@ class QLoRAFineTuner(FineTuner):
             train_dataset=dataset_dict['train'],
             eval_dataset=dataset_dict['validation'],
             data_collator=lambda features: DataCollatorForSeq2Seq(self.tokenizer, model=self.model)(features),
-            compute_metrics=compute_metrics
+            compute_metrics=metric_helper.compute
         )
 
         try:
