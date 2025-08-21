@@ -138,12 +138,12 @@ class ModelLoader:
                 else:
                     self.tokenizer.pad_token = self.tokenizer.eos_token or '[PAD]'
                     logger.info(f"Set pad_token to {self.tokenizer.pad_token}")
-            self.model.config.pad_token_id = self.tokenizer.pad_token_id
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id # type: ignore
             # Resize model embeddings if pad_token was added
-            if self.tokenizer.pad_token_id >= self.model.config.vocab_size:
-                self.model.resize_token_embeddings(len(self.tokenizer))
+            if self.tokenizer.pad_token_id >= self.model.config.vocab_size: # type: ignore
+                self.model.resize_token_embeddings(len(self.tokenizer)) # type: ignore
                 logger.info(f"Resized model embeddings to {len(self.tokenizer)} to accommodate pad_token")
-            logger.info(f"Set model.config.pad_token_id to {self.model.config.pad_token_id}")
+            logger.info(f"Set model.config.pad_token_id to {self.model.config.pad_token_id}") # type: ignore
         except Exception as e:
             logger.error(f"Failed to load tokenizer for {model_name}: {str(e)}")
             raise
@@ -158,6 +158,92 @@ class ModelLoader:
     def _validate_model_source(self, model_name: str) -> bool:
         supported_models = ["gpt2", "bert-base-italian", "electra-base-italian", "t5"]
         return any(model in model_name.lower() for model in supported_models) or Path(model_name).exists()
+
+    def _format_count(self, n: int) -> str:
+        # Human-friendly: 1.23M, 456.7M, 13.4B
+        if n >= 1_000_000_000:
+            return f"{n/1_000_000_000:.2f}B"
+        if n >= 1_000_000:
+            return f"{n/1_000_000:.2f}M"
+        if n >= 1_000:
+            return f"{n/1_000:.2f}K"
+        return str(n)
+
+    def _dtype_num_bytes(self, dtype: torch.dtype) -> int:
+        if dtype == torch.float32:
+            return 4
+        if dtype in (torch.float16, torch.bfloat16):
+            return 2
+        if dtype in (torch.int8,):
+            return 1
+        # Conservative default
+        return 4
+
+    def _estimate_param_memory_bytes(self, model: torch.nn.Module) -> int:
+        # Parameter memory footprint only (excludes optimizer states, activation buffers)
+        total_bytes = 0
+        for p in model.parameters():
+            # On quantized models (bnb), param.dtype may not reflect storage exactly,
+            # but it’s the best cheap proxy without bnb internals.
+            total_bytes += p.numel() * self._dtype_num_bytes(p.dtype)
+        return total_bytes
+
+    def _log_model_profile(self, title: str = "Loaded model profile") -> None:
+        # Count parameters
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        non_trainable_params = total_params - trainable_params
+
+        # Estimate memory (parameters only; excludes gradients/optimizer/activations)
+        approx_param_mem = self._estimate_param_memory_bytes(self.model)
+        # Convert to MB/GB
+        mem_mb = approx_param_mem / (1024**2)
+        mem_gb = approx_param_mem / (1024**3)
+
+        # PEFT/adapters info (best-effort)
+        peft_attached = False
+        try:
+            from peft import PeftModel
+            peft_attached = isinstance(self.model, PeftModel) or any("lora" in n.lower() for n, _ in self.model.named_parameters())
+        except Exception:
+            pass
+
+        # Quantization hint
+        quantized_hint = "Yes (bnb 4-bit)" if any(getattr(m, "weight_bit_width", None) in (4, "4") for m in self.model.modules()) else "Unknown/No"
+        # Fallback heuristic: check for bitsandbytes modules by name
+        if quantized_hint == "Unknown/No":
+            if any("bnb" in type(m).__name__.lower() or "bitsandbytes" in str(type(m)).lower() for m in self.model.modules()):
+                quantized_hint = "Likely (bitsandbytes detected)"
+
+        logger.info(
+            f"\n{title}\n"
+            f"- Model name: {self.model_name}\n"
+            f"- Model type: {self.model_type}\n"
+            f"- Device: {self.device}\n"
+            f"- Dtype: {self.dtype}\n"
+            f"- Quantized: {quantized_hint}\n"
+            f"- PEFT/Adapters attached: {peft_attached}\n"
+            f"- Total params: {self._format_count(total_params)} ({total_params:,})\n"
+            f"- Trainable params: {self._format_count(trainable_params)} ({trainable_params:,})\n"
+            f"- Non-trainable params: {self._format_count(non_trainable_params)} ({non_trainable_params:,})\n"
+            f"- Approx parameter memory: {mem_mb:.2f}MB ({mem_gb:.3f}GB) [parameters only]\n"
+        )
+
+    def get_model_profile(self) -> dict:
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        non_trainable_params = total_params - trainable_params
+        approx_param_mem = self._estimate_param_memory_bytes(self.model)
+        return {
+            "model_name": self.model_name,
+            "model_type": self.model_type,
+            "device": str(self.device),
+            "dtype": str(self.dtype).replace("torch.", ""),
+            "total_params": total_params,
+            "trainable_params": trainable_params,
+            "non_trainable_params": non_trainable_params,
+            "approx_param_mem_bytes": approx_param_mem,
+        }
 
     def generate_logits(self, texts: list[str]) -> dict:
         try:

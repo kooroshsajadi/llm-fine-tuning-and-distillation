@@ -97,6 +97,7 @@ class QLoRAFineTuner(FineTuner):
             train_mode=True
         )
         self.model = self.loader.model
+        self.loader._log_model_profile("Base model loaded")
         self.tokenizer = self.loader.tokenizer
         self.use_gpu = self.loader.use_gpu
 

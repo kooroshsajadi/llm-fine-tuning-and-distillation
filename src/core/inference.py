@@ -73,7 +73,7 @@ def inference(args):
 
     # Save predictions
     decoded_preds = tokenizer.batch_decode(predictions.predictions, skip_special_tokens=True)
-    output_path = Path("predictions.txt")
+    output_path = Path("data/predictions.txt")
     output_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with open(output_path, "w", encoding="utf-8") as f:
         for pred in decoded_preds:
