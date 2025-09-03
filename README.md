@@ -21,7 +21,7 @@ Currently compatible with seq2seq models (e.g., T5 or MarianMT), aiming for comp
 
 - **Dynamic hardware adaptation**: Automatically detects NVIDIA GPUs for QLoRA (4-bit quantization with BitsAndBytes for memory efficiency, reducing footprint by up to 4x while maintaining performance). Falls back to standard LoRA on CPUs or non-compatible hardware.
 - **Optimized for efficiency**: Uses bfloat16 on compatible CPUs (e.g., Intel ARC via IPEX optimization) for faster training and inference without precision loss. Gradient checkpointing and accumulation steps further reduce memory usage during training.
-- **Configurable LoRA parameters**: Rank (default 8), alpha (default 32), dropout (default 0.05), and target modules auto-detected based on model type (e.g., attention layers for seq2seq).
+- **Configurable LoRA parameters**: Rank, alpha, dropout, and target modules auto-detected based on model type (e.g., attention layers for seq2seq).
 - Supports training with custom datasets, including preprocessing via Hugging Face Datasets and tokenizers.
 
 ### 🗃️ Dataset Handling:
