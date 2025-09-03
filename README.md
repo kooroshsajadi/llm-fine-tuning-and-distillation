@@ -55,7 +55,7 @@ Uses `safetensors` for secure saving/loading with integrity checks. Models and t
 
 ## 🚧 Status
 
-> **Note**: This project is still **under active development**. Expect changes in structure, functionality, and APIs in the near future. Currently focused on seq2seq fine-tuning; full distillation pipeline coming soon.
+> **Note**: This project is still **under active development**. Expect changes in structure and functionality in the near future. Currently focused on seq2seq fine-tuning; full distillation pipeline coming soon.
 
 ## 📄 License
 
