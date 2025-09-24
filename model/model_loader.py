@@ -8,7 +8,7 @@ from transformers import (
     BitsAndBytesConfig
 )
 from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training, LoraConfig
-from src.utils.logging_utils import setup_logger
+from utils.logging_utils import setup_logger
 from typing import Type
 
 logger = setup_logger('src.core.model_loader')

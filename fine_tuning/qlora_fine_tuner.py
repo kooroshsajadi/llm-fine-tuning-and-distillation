@@ -2,22 +2,14 @@ import logging
 import os
 import torch
 from pathlib import Path
-from transformers import EvalPrediction
-from transformers import AutoModelForSeq2SeqLM
-from transformers.trainer_utils import IntervalStrategy
 from peft import LoraConfig
-from datasets import Dataset
-from src.data.data_preparation import prepare_tokenized_dataset, data_collator
 from model.model_loader import ModelLoader
 from fine_tuning.fine_tuner import FineTuner
 from utils.logging_utils import setup_logger
 import utils.utils as utils
 from datasets import DatasetDict
 from utils.metrics_utils import HFMetricHelper
-import numpy as np
-import nltk
-from evaluate import load
-from src.data.data_preparation import prepare_dataset_dict
+from data.data_preparation import prepare_dataset_dict
 from transformers import (
     Trainer, Seq2SeqTrainer, TrainingArguments, Seq2SeqTrainingArguments,
     DataCollatorForLanguageModeling, DataCollatorForSeq2Seq, PreTrainedTokenizerBase
