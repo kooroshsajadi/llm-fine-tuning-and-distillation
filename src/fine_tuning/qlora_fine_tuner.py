@@ -99,7 +99,7 @@ class QLoRAFineTuner(FineTuner):
             lora_config=self.lora_config,
             use_qlora=use_qlora,
             device_map=device_map,
-            max_length=max_length,
+            max_length=self.max_length,
             train_mode=True
         )
         self.model = self.model_loader.model

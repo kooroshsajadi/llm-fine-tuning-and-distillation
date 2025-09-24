@@ -40,7 +40,7 @@ class ModelLoader:
         self.train_mode = train_mode
         self.use_qlora = use_qlora
 
-        self._validate_inputs(max_length=max_length, model_name=model_name)
+        self._validate_inputs(max_length=self.max_length, model_name=model_name)
 
         self._select_device(device_map=device_map)
 
