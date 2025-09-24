@@ -2,8 +2,8 @@ import logging
 import os
 import torch
 from pathlib import Path
-from transformers import Trainer, TrainingArguments, EvalPrediction
-from transformers import AutoModelForSeq2SeqLM, DataCollatorForSeq2Seq, Seq2SeqTrainingArguments, Seq2SeqTrainer
+from transformers import EvalPrediction
+from transformers import AutoModelForSeq2SeqLM
 from transformers.trainer_utils import IntervalStrategy
 from peft import LoraConfig
 from datasets import Dataset
@@ -18,6 +18,10 @@ import numpy as np
 import nltk
 from evaluate import load
 from src.data.data_preparation import prepare_dataset_dict
+from transformers import (
+    Trainer, Seq2SeqTrainer, TrainingArguments, Seq2SeqTrainingArguments,
+    DataCollatorForLanguageModeling, DataCollatorForSeq2Seq, PreTrainedTokenizerBase
+)
 
 
 # Logging setup
@@ -31,7 +35,9 @@ class QLoRAFineTuner(FineTuner):
         "masked_lm": ["query", "key", "value", "output.dense"],
         # "masked_lm": ["q", "k", "v", "dense"],
         "SEQ_2_SEQ_LM": ["self_attn.k", "self_attn.q", "self_attn.v", "self_attn.out", "encoder_attn.k",
-                                       "encoder_attn.q", "encoder_attn.v", "encoder_attn.out", "fc1", "fc2"]
+                                       "encoder_attn.q", "encoder_attn.v", "encoder_attn.out", "fc1", "fc2"],
+        "distilgpt2": ["c_attn", "c_proj", "c_fc", "c_proj"],
+        "llama3": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
     }
 
     def __init__(
@@ -73,13 +79,13 @@ class QLoRAFineTuner(FineTuner):
             raise ValueError(f"Unsupported model_type: {self.model_type}. Choose from {list(self.DEFAULT_TARGET_MODULES.keys())}")
 
         # Set target_modules
-        target_modules = target_modules or self.DEFAULT_TARGET_MODULES[self.model_type]
+        self.target_modules = target_modules
 
         # LoRA configuration
         self.lora_config = LoraConfig(
             r=lora_rank,
             lora_alpha=lora_alpha,
-            target_modules=target_modules,
+            target_modules=self.target_modules,
             lora_dropout=lora_dropout,
             bias="none",
             task_type=self.model_type.upper(),
@@ -87,8 +93,8 @@ class QLoRAFineTuner(FineTuner):
         )
 
         # Load model and tokenizer
-        self.loader = ModelLoader(
-            model_name=base_model,
+        self.model_loader = ModelLoader(
+            model_name=self.base_model,
             model_type=self.model_type,
             lora_config=self.lora_config,
             use_qlora=use_qlora,
@@ -96,12 +102,129 @@ class QLoRAFineTuner(FineTuner):
             max_length=max_length,
             train_mode=True
         )
-        self.model = self.loader.model
-        self.loader._log_model_profile("Base model loaded")
-        self.tokenizer = self.loader.tokenizer
-        self.use_gpu = self.loader.use_gpu
+        self.model = self.model_loader.model
+        self.model_loader._log_model_profile("Base model loaded")
+        self.tokenizer = self.model_loader.tokenizer
+        self.use_gpu = self.model_loader.use_gpu
 
         self.model.print_trainable_parameters()
+
+    def _get_causal_lm_training_args(
+        self,
+        output_dir: str,
+        per_device_train_batch_size: int,
+        per_device_eval_batch_size: int,
+        num_train_epochs: int,
+        learning_rate: float,
+        logging_steps: int, 
+        save_strategy: str,
+        optim_name: str
+    ) -> TrainingArguments:
+        """Returns TrainingArguments for causal language models."""
+        return TrainingArguments(
+            output_dir=output_dir,
+            per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
+            num_train_epochs=num_train_epochs,
+            learning_rate=learning_rate,
+            logging_steps=logging_steps,
+            save_strategy=save_strategy,
+            eval_strategy="epoch",
+            report_to="none",
+            fp16=self.model_loader.use_fp16,
+            bf16=self.model_loader.use_bf16,
+            save_total_limit=1,
+            dataloader_pin_memory=self.model_loader.use_cuda or self.model_loader.use_xpu,
+            gradient_accumulation_steps=4,
+            max_grad_norm=0.3,
+            warmup_ratio=0.05,
+            remove_unused_columns=False,
+            optim=optim_name,
+            gradient_checkpointing=False,
+            logging_dir='logs',
+        )
+
+    def _get_seq2seq_training_args(
+        self,
+        output_dir: str,
+        per_device_train_batch_size: int,
+        per_device_eval_batch_size: int,
+        num_train_epochs: int,
+        learning_rate: float,
+        logging_steps: int,
+        save_strategy: str,
+        optim_name: str
+    ) -> Seq2SeqTrainingArguments:
+        """Returns Seq2SeqTrainingArguments for sequence-to-sequence models."""
+        return Seq2SeqTrainingArguments(
+            output_dir=output_dir,
+            per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
+            num_train_epochs=num_train_epochs,
+            learning_rate=learning_rate,
+            logging_steps=logging_steps,
+            save_strategy=save_strategy,
+            eval_strategy="epoch",
+            predict_with_generate=True,
+            generation_max_length=128,
+            eval_accumulation_steps=2,
+            generation_num_beams=4,
+            report_to="none",
+            fp16=self.model_loader.use_fp16,
+            bf16=self.model_loader.use_bf16,
+            save_total_limit=1,
+            dataloader_pin_memory=self.model_loader.use_cuda or self.model_loader.use_xpu,
+            gradient_accumulation_steps=4,
+            max_grad_norm=0.3,
+            warmup_ratio=0.05,
+            remove_unused_columns=False,
+            optim=optim_name,
+            gradient_checkpointing=False,
+            logging_dir='logs',
+        )
+
+    def _get_trainer(
+        self,
+        model_type: str,
+        dataset_dict: DatasetDict,
+        training_args: TrainingArguments,
+        tokenizer: PreTrainedTokenizerBase,
+        model
+    ):
+        """Factory method to return the appropriate trainer based on model_type."""
+        if model_type not in self.model_loader.MODEL_TYPE_MAPPING:
+            raise ValueError(
+                f"Unsupported model_type: {model_type}. "
+                f"Choose from {list(self.model_loader.MODEL_TYPE_MAPPING.keys())}"
+            )
+
+        if model_type == "causal_lm":
+            data_collator = DataCollatorForLanguageModeling(
+                tokenizer=tokenizer,
+                mlm=False,  # No masked language modeling for causal LM
+                pad_to_multiple_of=8 if self.use_qlora else None
+            )
+            compute_metrics = None  # Perplexity/loss computed by default
+            return Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=dataset_dict['train'],
+                eval_dataset=dataset_dict['validation'] if 'validation' in dataset_dict else None,
+                data_collator=data_collator,
+                compute_metrics=compute_metrics
+            )
+        elif model_type == "seq2seq_lm":
+            metric_helper = HFMetricHelper(tokenizer=tokenizer, bertscore_model_type="bert-base-multilingual-cased")
+            return Seq2SeqTrainer(
+                model=model,
+                args=training_args,
+                train_dataset=dataset_dict['train'],
+                eval_dataset=dataset_dict['validation'] if 'validation' in dataset_dict else None,
+                data_collator=DataCollatorForSeq2Seq(tokenizer, model=model),
+                compute_metrics=metric_helper.compute
+            )
+        else:
+            raise NotImplementedError(f"Trainer for model_type {model_type} not implemented")
 
     def train(
         self,
@@ -115,10 +238,26 @@ class QLoRAFineTuner(FineTuner):
         save_strategy: str = "epoch"
     ):
 
-        optim_name = "paged_adamw_8bit" if self.use_qlora and self.use_gpu and not self.loader.use_xpu else "adamw_torch"
+        # Validate dataset.
+        if 'train' not in dataset_dict:
+            raise ValueError("DatasetDict must contain a 'train' split.")
+        
+        # Optimizer selection
+        optim_name = "paged_adamw_8bit" if self.use_qlora and self.model_loader.use_cuda and not self.model_loader.use_xpu else "adamw_torch"
         self.logger.info(f"Using optimizer: {optim_name}")
 
-        training_args = Seq2SeqTrainingArguments(
+        # Select training arguments based on model type.
+        training_args_map = {
+            "causal_lm": self._get_causal_lm_training_args,
+            "seq2seq_lm": self._get_seq2seq_training_args
+        }
+        if self.model_type not in training_args_map:
+            raise ValueError(
+                f"Unsupported model_type: {self.model_type}. "
+                f"Choose from {list(training_args_map.keys())}"
+            )
+        
+        training_args = training_args_map[self.model_type](
             output_dir=output_dir,
             per_device_train_batch_size=per_device_train_batch_size,
             per_device_eval_batch_size=per_device_eval_batch_size,
@@ -126,39 +265,21 @@ class QLoRAFineTuner(FineTuner):
             learning_rate=learning_rate,
             logging_steps=logging_steps,
             save_strategy=save_strategy,
-            eval_strategy=IntervalStrategy.EPOCH,
-            predict_with_generate=True,
-            generation_max_length=128,
-            eval_accumulation_steps=2,
-            generation_num_beams=4, # For beam search decoding
-            report_to="none",
-            fp16=self.use_gpu and not self.loader.use_xpu,
-            bf16=self.loader.use_xpu,
-            save_total_limit=1,
-            dataloader_pin_memory=self.use_gpu,
-            gradient_accumulation_steps=4,
-            max_grad_norm=0.3,
-            warmup_ratio=0.05,
-            remove_unused_columns=False,
-            optim=optim_name,
-            gradient_checkpointing=False,
-            logging_dir='logs',
+            optim_name=optim_name
         )
-
-        metric_helper = HFMetricHelper(tokenizer=self.tokenizer, bertscore_model_type="bert-base-multilingual-cased")
-
-        seq2seq_trainer = Seq2SeqTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=dataset_dict['train'],
-            eval_dataset=dataset_dict['validation'],
-            data_collator=lambda features: DataCollatorForSeq2Seq(self.tokenizer, model=self.model)(features),
-            compute_metrics=metric_helper.compute
+        
+        # Initialize trainer
+        trainer = self._get_trainer(
+            model_type=self.model_type,
+            dataset_dict=dataset_dict,
+            training_args=training_args,
+            tokenizer=self.tokenizer,
+            model=self.model
         )
 
         try:
             self.logger.info("Verifying gradient connectivity...")
-            test_input = next(iter(seq2seq_trainer.get_train_dataloader()))
+            test_input = next(iter(trainer.get_train_dataloader()))
             test_input = {k: v.to(self.model.device) for k, v in test_input.items()}
             with torch.set_grad_enabled(True):
                 self.model.zero_grad()
@@ -187,7 +308,7 @@ class QLoRAFineTuner(FineTuner):
 
         self.model.config.use_cache = False
         self.model.train()
-        seq2seq_trainer.train()
+        trainer.train()
 
         if 'psutil' in locals():
             self.logger.info(f"Final memory usage: {process.memory_info().rss / 1024**2:.2f} MB")
@@ -195,12 +316,12 @@ class QLoRAFineTuner(FineTuner):
         model_dir = Path(output_dir) / "model"
         tok_dir = Path(output_dir) / "tokenizer"
 
-        self.model.save_pretrained(model_dir)
+        self.model.save_pretrained(str(model_dir))
         self.tokenizer.save_pretrained(tok_dir)
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/marian_mt.yaml")
+    config = utils.return_config("configs/fine_tuning/distilgpt2-qlora.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
@@ -209,21 +330,21 @@ def main():
         lora_rank=tuner_config.get('lora_rank', 8),
         lora_alpha=tuner_config.get('lora_alpha', 32),
         lora_dropout=tuner_config.get('lora_dropout', 0.05),
-        target_modules=tuner_config.get('target_modules', None),
+        target_modules=tuner_config.get('target_modules'),
         use_qlora=tuner_config.get('use_qlora', False),
         device_map=tuner_config.get('device_map', 'auto'),
         max_length=tuner_config.get('max_length', 128),
         logger=logger
     )
 
-    dataset_dict = prepare_dataset_dict(input_path=config['datasets']['prefettura_v1_texts'],
-                                        tokenizer=tuner.loader.tokenizer,
+    dataset_dict = prepare_dataset_dict(input_path=config['datasets']['leggi_area_3_text'],
+                                        tokenizer=tuner.model_loader.tokenizer,
                                         max_length=tuner_config.get('max_length', 128),
                                         model_type=tuner_config.get('model_type', 'causal_lm'))
     
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='models/fine_tuned_models/opus-mt-it-en-v1',
+        output_dir='models/fine_tuned_models/distilgpt2',
         num_train_epochs=tuner_config.get('num_train_epochs', 3),
         learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
         logging_steps=tuner_config.get('logging_steps', 10),
