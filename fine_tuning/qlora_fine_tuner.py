@@ -8,12 +8,12 @@ from transformers.trainer_utils import IntervalStrategy
 from peft import LoraConfig
 from datasets import Dataset
 from src.data.data_preparation import prepare_tokenized_dataset, data_collator
-from src.core.model_loader import ModelLoader
-from src.fine_tuning.fine_tuner import FineTuner
-from src.utils.logging_utils import setup_logger
-import src.utils.utils as utils
+from model.model_loader import ModelLoader
+from fine_tuning.fine_tuner import FineTuner
+from utils.logging_utils import setup_logger
+import utils.utils as utils
 from datasets import DatasetDict
-from src.utils.metrics_utils import HFMetricHelper
+from utils.metrics_utils import HFMetricHelper
 import numpy as np
 import nltk
 from evaluate import load
