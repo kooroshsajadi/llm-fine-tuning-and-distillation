@@ -4,7 +4,8 @@
 
 ## 📌 Project Goals
 
-- Develop LLM fine-tuning solutions adaptable to various hardware types while exploiting their individual advancements. 
+- Provide LLM fine-tuning solutions adaptable to various hardware types while exploiting their individual advancements.
+- Provide code adaptable to varius LLM types such as causal and sequence-2-sequence models.
 - Distill knowledge from large transformer-based language models into smaller, student models.
 - Explore techniques like logit matching and adapter-based fine-tuning.
 - Enable fast inference with reduced computational overhead.
@@ -16,7 +17,7 @@
 - 🎯 **Fine-tuning** support for custom large language models including seq2seq architectures.
 - 🧠 **Knowledge distillation** with logit-based supervision.
 - 🗃️ **Dataset preprocessing** with Hugging Face Datasets and tokenizers.
-- 📊 **Comprehensive Evaluation** with metrics specially implemented for seq2seq models, including ROUGE, BLEU, and BERTScore to provide robust semantic and lexical quality assessment.
+- 📊 **Comprehensive Evaluation** including ROUGE, BLEU, and BERTScore to provide robust semantic and lexical quality assessment.
 - 📦 **Safe saving and loading** using `safetensors` format and integrity checks.
 - 🧪 **Modular design** for training, inference, and evaluation.
 
