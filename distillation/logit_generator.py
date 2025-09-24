@@ -3,7 +3,7 @@ import sys
 import logging
 from pathlib import Path
 from tqdm import tqdm
-from src.core.model_loader import ModelLoader
+from model.model_loader import ModelLoader
 from src.data.data_preparation import TextDataset
 from src.utils.utils import generate_checksum, batch_iterable
 import numpy as np

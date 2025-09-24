@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from transformers import Trainer, TrainingArguments
 from datasets import Dataset
-from src.core.model_loader import ModelLoader
+from model.model_loader import ModelLoader
 from src.utils.utils import save_model, generate_checksum, LogEpochLossCallback
 from src.data.data_preparation import load_kd_dataset, data_collator
 
