@@ -1,6 +1,6 @@
 # LLM Fine-Tuning and Distillation 🚀
 
-**Distilled LLM** is an under-development project focused on training and deploying lightweight, efficient large language models through **knowledge distillation** and other model compression techniques. It leverages the Hugging Face Transformers ecosystem for flexibility and modularity.
+**LLM Fine-Tuning and Distillation** is an under-development project focused on training and deploying lightweight, efficient large language models through **fine-tuning** and **knowledge distillation**. It leverages the Hugging Face Transformers ecosystem for flexibility and modularity.
 
 ## 📌 Project Goals
 
