@@ -7,16 +7,17 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig
 )
-from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
-from src.utils.logging_utils import setup_logger
+from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training, LoraConfig
+from utils.logging_utils import setup_logger
+from typing import Type
 
-logger = setup_logger(__name__)
+logger = setup_logger('src.core.model_loader')
 
 class ModelLoader:
     MODEL_TYPE_MAPPING = {
         "causal_lm": AutoModelForCausalLM,
         "masked_lm": AutoModelForMaskedLM,
-        "SEQ_2_SEQ_LM": AutoModelForSeq2SeqLM
+        "seq2seq_lm": AutoModelForSeq2SeqLM
     }
 
     def __init__(
@@ -32,14 +33,174 @@ class ModelLoader:
     ):
         self.model_name = model_name
         self.model_type = model_type
-        self.use_gpu = torch.cuda.is_available() or torch.xpu.is_available()
+        self.use_cuda = torch.cuda.is_available()
         self.use_xpu = torch.xpu.is_available()
+        self.use_gpu = self.use_cuda or self.use_xpu  # Maintain for backward compatibility
         self.max_length = max_length
         self.train_mode = train_mode
+        self.use_qlora = use_qlora
 
+        self._validate_inputs(max_length=self.max_length, model_name=model_name)
+
+        self._select_device(device_map=device_map)
+
+        cuda_capability = self._select_data_type(use_qlora=self.use_qlora)
+
+        # Configure QLoRA and BitStandBytes.
+        bnb_config = None
+        if self.use_qlora:
+            if not self.use_cuda:
+                logger.warning("QLoRA requires CUDA GPU; disabling quantization")
+                self.use_qlora = False
+            elif self.use_xpu:
+                logger.warning("QLoRA not supported on Intel XPU; disabling quantization")
+                self.use_qlora = False
+            elif not self._check_bitsandbytes():
+                logger.warning("bitsandbytes unavailable; disabling QLoRA")
+                self.use_qlora = False
+            else:
+                # Dynamically select compute dtype for QLoRA
+                bnb_compute_dtype = (
+                    torch.bfloat16 if cuda_capability[0] >= 8 else
+                    torch.float16 if cuda_capability[0] >= 7 else
+                    torch.float32
+                )
+                bnb_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=bnb_compute_dtype,
+                    bnb_4bit_use_double_quant=True
+                )
+                logger.info(f"QLoRA enabled with 4-bit NF4 quantization, compute dtype: {bnb_compute_dtype}")
+
+        try:
+            if self.model_type not in self.MODEL_TYPE_MAPPING:
+                raise ValueError(
+                    f"Unsupported model_type: {self.model_type}. "
+                    f"Choose from {list(self.MODEL_TYPE_MAPPING.keys())}"
+                )
+            model_class: Type = self.MODEL_TYPE_MAPPING[self.model_type]
+            if self.model_type == "causal_lm" and model_class != AutoModelForCausalLM:
+                logger.warning(f"Expected AutoModelForCausalLM for causal_lm, got {model_class.__name__}")
+
+            model_kwargs = {
+                "quantization_config": bnb_config,
+                "device_map": device_map if not bnb_config else "auto",  # Let bitsandbytes handle placement
+                "output_hidden_states": False,
+                "torch_dtype": self.dtype if not bnb_config else None,
+                "trust_remote_code": False
+            }
+
+            self.model = model_class.from_pretrained(model_name, **model_kwargs)
+            if not bnb_config:  # Only move to device if not quantized
+                self.model = self.model.to(self.device)
+
+            # # Set loss_type based on model_type
+            # loss_type_map = {
+            #     "causal_lm": "ForCausalLMLoss",
+            #     "seq2seq_lm": "ForSeq2SeqLMLoss",  # Placeholder; adjust based on actual loss
+            #     "masked_lm": "ForMaskedLMLoss"     # Placeholder; adjust based on actual loss
+            # }
+            # if self.model_type in loss_type_map:
+            #     self.model.config.loss_type = loss_type_map[self.model_type]
+            #     logger.info(f"Set model.config.loss_type to {self.model.config.loss_type}")
+            # else:
+            #     logger.warning(f"No loss_type defined for {self.model_type}; keeping default")
+            
+        except (ValueError, OSError) as e:
+            logger.error(f"Failed to load model {model_name}: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading model {model_name}: {str(e)}")
+            raise
+
+        if self.use_xpu:
+            try:
+                import intel_extension_for_pytorch as ipex
+                self.model = ipex.optimize(self.model, dtype=torch.bfloat16)  # Explicitly use BF16
+                logger.info("Applied IPEX optimization for Intel XPU with BF16")
+            except ImportError:
+                logger.warning("intel-extension-for-pytorch not installed; skipping IPEX optimization")
+            except Exception as e:
+                logger.error(f"IPEX optimization failed: {str(e)}")
+                raise
+
+        if self.use_qlora and lora_config:
+            if not isinstance(lora_config, LoraConfig):
+                raise TypeError("lora_config must be a peft.LoraConfig object")
+            self.model = prepare_model_for_kbit_training(
+                self.model,
+                use_gradient_checkpointing=True  # Could be a parameter
+            )
+            logger.info("Prepared model for QLoRA training with gradient checkpointing")
+
+        if lora_config:
+            if not isinstance(lora_config, LoraConfig):
+                raise TypeError("lora_config must be a peft.LoraConfig object")
+            self.model = get_peft_model(self.model, lora_config)
+            self.model.print_trainable_parameters()
+            trainable_params = [n for n, p in self.model.named_parameters() if p.requires_grad]
+            logger.info(f"Trainable LoRA parameters: {trainable_params}")
+            if not trainable_params:
+                raise RuntimeError("No trainable parameters detected after LoRA injection")
+        elif adapter_path:
+            try:
+                self.model = PeftModel.from_pretrained(self.model, adapter_path)
+                if not self.use_qlora:  # Only move if not quantized
+                    self.model = self.model.to(self.device)
+                logger.info(f"Loaded PEFT adapter from {adapter_path}")
+            except Exception as e:
+                logger.error(f"Failed to load adapter from {adapter_path}: {str(e)}")
+                raise
+        
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                padding_side='right' if self.model_type == "causal_lm" else 'left',
+                trust_remote_code=False
+            )
+            if not self.tokenizer.pad_token:
+                if self.model_type == "masked_lm":
+                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                    logger.info("Added [PAD] as pad_token for tokenizer")
+                elif self.model_type == "causal_lm" and self.tokenizer.eos_token:
+                    self.tokenizer.pad_token = self.tokenizer.eos_token
+                    logger.info(f"Set pad_token to eos_token: {self.tokenizer.pad_token}")
+                else:
+                    logger.warning("No eos_token available; setting pad_token to [PAD]")
+                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+                    self.tokenizer.pad_token = '[PAD]'
+            self.model.config.pad_token_id = self.tokenizer.pad_token_id
+            if self.tokenizer.pad_token_id >= self.model.config.vocab_size:
+                self.model.resize_token_embeddings(len(self.tokenizer))
+                logger.info(f"Resized model embeddings to {len(self.tokenizer)} to accommodate pad_token")
+            logger.info(f"Set model.config.pad_token_id to {self.tokenizer.pad_token_id}")
+        except (ValueError, OSError) as e:
+            logger.error(f"Failed to load tokenizer for {model_name}: {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading tokenizer for {model_name}: {str(e)}")
+            raise
+
+        self.model.train(self.train_mode)
+
+    def _validate_inputs(self, max_length: int, model_name: str) -> None:
+                # Max length validation.
+        if max_length <= 0:
+            raise ValueError("max_length must be positive")
+        
+        # Model name validation.
+        if not isinstance(model_name, str) or not model_name:
+            raise ValueError("model_name must be a non-empty string")
+        
+        # Model type validation.
         if self.model_type not in self.MODEL_TYPE_MAPPING:
-            raise ValueError(f"Unsupported model_type: {self.model_type}. Choose from {list(self.MODEL_TYPE_MAPPING.keys())}")
-
+            raise ValueError(
+                f"Unsupported model_type: {self.model_type}. "
+                f"Supported types: {list(self.MODEL_TYPE_MAPPING.keys())}"
+            )
+    
+    def _select_device(self, device_map: str) -> None:
         if device_map == "auto":
             self.device = torch.device(
                 "xpu" if self.use_xpu else "cuda" if torch.cuda.is_available() else "cpu"
@@ -47,106 +208,33 @@ class ModelLoader:
         else:
             self.device = torch.device(device_map)
         logger.info(f"Using device: {self.device}")
+    
+    def _select_data_type(self, use_qlora) -> tuple[int, int]:
+        cuda_capability = (0, 0)
+        if self.use_cuda:
+            cuda_capability = torch.cuda.get_device_capability()
+            logger.debug(f"CUDA capability: {cuda_capability}")
 
-        self.use_fp16 = self.use_gpu and not use_qlora and not self.use_xpu
-        self.dtype = torch.float16 if self.use_fp16 else torch.bfloat16 if self.use_xpu else torch.float32
+        # Enable FP16 only for CUDA with Tensor Cores (SM 7.0+)
+        self.use_fp16 = (
+            self.use_cuda and not use_qlora and not self.use_xpu
+            and cuda_capability[0] >= 7
+        )
+
+        # Enable BF16 for CUDA (SM 8.0+) or XPU
+        self.use_bf16 = (
+            (self.use_cuda and cuda_capability[0] >= 8 and not self.use_fp16)
+            or self.use_xpu
+        )
+
+        # Data type selection.
+        self.dtype = (
+            torch.float16 if self.use_fp16 else
+            torch.bfloat16 if self.use_bf16 else
+            torch.float32
+        )
         logger.info(f"Using dtype: {self.dtype}")
-
-        bnb_config = None
-        if use_qlora:
-            if not torch.cuda.is_available():
-                logger.warning("QLoRA requires CUDA GPU; disabling quantization")
-                use_qlora = False
-            elif self.use_xpu:
-                logger.warning("QLoRA not supported on Intel ARC; disabling quantization")
-                use_qlora = False
-            elif not self._check_bitsandbytes():
-                logger.warning("bitsandbytes unavailable; disabling QLoRA")
-                use_qlora = False
-            else:
-                bnb_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_quant_type="nf4",
-                    bnb_4bit_compute_dtype=torch.bfloat16,
-                    bnb_4bit_use_double_quant=True
-                )
-                logger.info("QLoRA enabled with 4-bit NF4 quantization")
-
-        try:
-            model_class = self.MODEL_TYPE_MAPPING[self.model_type]
-            self.model = model_class.from_pretrained(
-                model_name,
-                quantization_config=bnb_config,
-                device_map=device_map if not bnb_config else None,
-                output_hidden_states=False,
-                torch_dtype=self.dtype if not bnb_config else None,
-                trust_remote_code=False
-            ).to(self.device)
-        except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {str(e)}")
-            raise
-
-        if self.use_xpu:
-            try:
-                import intel_extension_for_pytorch as ipex
-                self.model = ipex.optimize(self.model)
-                logger.info("Applied IPEX optimization for Intel ARC")
-            except ImportError:
-                logger.warning("intel-extension-for-pytorch not installed; skipping IPEX optimization")
-
-        if use_qlora and lora_config:
-            self.model = prepare_model_for_kbit_training(self.model, use_gradient_checkpointing=True)
-
-        if lora_config:
-            self.model = get_peft_model(self.model, lora_config)
-            for name, param in self.model.named_parameters():
-                param.requires_grad = "lora" in name.lower()
-            self.model.print_trainable_parameters()
-            trainable_params = [n for n, p in self.model.named_parameters() if p.requires_grad]
-            # logger.info(f"Trainable parameters: {trainable_params}")
-            if not trainable_params:
-                raise RuntimeError("No trainable parameters detected after LoRA injection")
-        elif adapter_path:
-            try:
-                self.model = PeftModel.from_pretrained(self.model, adapter_path).to(self.device)
-            except Exception as e:
-                logger.error(f"Failed to load adapter from {adapter_path}: {str(e)}")
-                raise
-
-        # Check if adapters are loaded correctly
-        trainable_params = [(n, p.requires_grad) for n, p in self.model.named_parameters()]
-        print("\n--- Trainable Parameters ---")
-        for n, req_grad in trainable_params:
-            if req_grad:
-                print(f"{n}: requires_grad={req_grad}")
-        print(f"Total trainable params: {sum(x[1] for x in trainable_params)}")
-        assert any(x[1] for x in trainable_params), "No parameters require grad!"
-        
-        self.model.train(train_mode)
-
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                padding_side='right' if self.model_type == "causal_lm" else 'left',
-                trust_remote_code=False
-            )
-            # Ensure pad_token is set
-            if not self.tokenizer.pad_token:
-                if self.model_type == "masked_lm":
-                    self.tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-                    logger.info("Added [PAD] as pad_token for tokenizer")
-                else:
-                    self.tokenizer.pad_token = self.tokenizer.eos_token or '[PAD]'
-                    logger.info(f"Set pad_token to {self.tokenizer.pad_token}")
-            self.model.config.pad_token_id = self.tokenizer.pad_token_id # type: ignore
-            # Resize model embeddings if pad_token was added
-            if self.tokenizer.pad_token_id >= self.model.config.vocab_size: # type: ignore
-                self.model.resize_token_embeddings(len(self.tokenizer)) # type: ignore
-                logger.info(f"Resized model embeddings to {len(self.tokenizer)} to accommodate pad_token")
-            logger.info(f"Set model.config.pad_token_id to {self.model.config.pad_token_id}") # type: ignore
-        except Exception as e:
-            logger.error(f"Failed to load tokenizer for {model_name}: {str(e)}")
-            raise
+        return cuda_capability
 
     def _check_bitsandbytes(self) -> bool:
         try:

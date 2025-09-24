@@ -1,8 +1,7 @@
 import torch
-from src.core.model_loader import ModelLoader
-from src.data.data_preparation import TextDataset
+from model.model_loader import ModelLoader
+from data.data_preparation import TextDataset
 import torch.nn.functional as F
-# from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def observe_teacher_outputs(
     prompt_file="data/synthetic/prompts_v1.txt",

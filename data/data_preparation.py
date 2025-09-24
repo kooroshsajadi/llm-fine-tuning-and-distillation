@@ -1,11 +1,12 @@
 import logging
+import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from transformers import PreTrainedTokenizerBase, TensorType
 from datasets import Dataset, DatasetDict, load_dataset
-from src.utils.logging_utils import setup_logger
+from utils.logging_utils import setup_logger
 
 logger = setup_logger(__name__)
 
@@ -58,14 +59,21 @@ def prepare_tokenized_dataset(
     tokenizer: PreTrainedTokenizerBase,
     max_length: int = 128,
     logger: Optional[logging.Logger] = None,
-    model_type: str = "causal_lm"
+    model_type: str = "causal_lm",
+    masking_probability: float = 0.15
 ) -> Dataset:
     if logger is None:
-        logger = setup_logger(__name__)
+        logger = setup_logger('src.data.data_preparation')
 
     logger.info(f"Preparing dataset from {input_path} for {model_type}")
-    prompt_dataset = TextDataset(input_path, transform=None)
-    texts = prompt_dataset.texts
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Input file {input_path} does not exist")
+    try:
+        prompt_dataset = TextDataset(input_path, transform=None)
+        texts = prompt_dataset.texts
+    except Exception as e:
+        logger.error(f"Failed to load dataset from {input_path}: {str(e)}")
+        raise
 
     if len(texts) == 0:
         raise ValueError("No valid texts in dataset")
@@ -73,7 +81,23 @@ def prepare_tokenized_dataset(
         logger.warning(f"Dataset size ({len(texts)}) is smaller than typical batch size (4)")
 
     try:
-        if model_type == "masked_lm":
+        if model_type == "causal_lm":
+            tokenized = tokenizer(
+                texts,
+                padding='max_length',
+                truncation=True,
+                max_length=max_length,
+                return_tensors=TensorType.PYTORCH,
+                add_special_tokens=True
+            )
+            input_ids = tokenized['input_ids']
+            labels = input_ids.clone()
+            # Shift labels for next-token prediction
+            labels[:, :-1] = input_ids[:, 1:]
+            labels[:, -1] = -100
+            labels[tokenized['attention_mask'] == 0] = -100
+            logger.info(f"Tokenizer selected for causal_lm with shifted labels")
+        elif model_type == "masked_lm":
             tokenized = tokenizer(
                 texts,
                 padding='max_length',
@@ -84,13 +108,13 @@ def prepare_tokenized_dataset(
             )
             labels = tokenized['input_ids'].clone()
             special_tokens_mask = tokenized['special_tokens_mask'].bool()
-            probability_matrix = torch.full(labels.shape, 0.15)
+            probability_matrix = torch.full(labels.shape, masking_probability)
             probability_matrix.masked_fill_(special_tokens_mask, 0.0)
             masked_indices = torch.bernoulli(probability_matrix).bool()
             labels[~masked_indices] = -100
             labels[masked_indices] = tokenized['input_ids'][masked_indices]
-            logger.info(f"Tokenizer selected for model type {model_type}.")
-        elif model_type == "SEQ_2_SEQ_LM":
+            logger.info(f"Tokenizer selected for masked_lm with {masking_probability*100}% masking")
+        elif model_type == "seq2seq_lm":
             tokenized = tokenizer(
                 texts,
                 padding='max_length',
@@ -100,27 +124,31 @@ def prepare_tokenized_dataset(
             )
             labels = tokenized['input_ids'].clone()
             labels[labels == tokenizer.pad_token_id] = -100
-            logger.info(f"Tokenizer selected for model type {model_type}.")
+            logger.info(f"Tokenizer selected for seq2seq_lm")
         else:
-            tokenized = tokenizer(
-                texts,
-                padding='max_length',
-                truncation=True,
-                max_length=max_length,
-                return_tensors=TensorType.PYTORCH
-            )
-            labels = tokenized['input_ids'].clone()
-            logger.info(f"Tokenizer selected for miscellaneous model type.")
+            raise ValueError(f"Unsupported model_type: {model_type}. Choose from ['causal_lm', 'masked_lm', 'seq2seq_lm']")
 
-        dataset = Dataset.from_dict({
+        if 'input_ids' not in tokenized or 'attention_mask' not in tokenized:
+            logger.error("Tokenization did not produce input_ids or attention_mask")
+            raise ValueError("Invalid tokenizer output")
+        dataset_dict = {
             'input_ids': tokenized['input_ids'],
             'attention_mask': tokenized['attention_mask'],
             'labels': labels
-        })
+        }
+        if model_type == "masked_lm" and 'special_tokens_mask' in tokenized:
+            dataset_dict['special_tokens_mask'] = tokenized['special_tokens_mask']
+        dataset = Dataset.from_dict(dataset_dict)
         logger.info(f"Dataset prepared with {len(dataset)} examples")
         return dataset
+    except tokenizer.TokenizerError as e:
+        logger.error(f"Tokenizer error: {str(e)}")
+        raise
+    except RuntimeError as e:
+        logger.error(f"Runtime error during tokenization (e.g., out of memory): {str(e)}")
+        raise
     except Exception as e:
-        logger.error(f"Tokenization failed: {str(e)}")
+        logger.error(f"Unexpected error during tokenization: {str(e)}")
         raise
 
 def data_collator(
@@ -160,7 +188,7 @@ def prepare_dataset_dict(
     Always returns reproducible splits given the same SPLIT_CONFIG and input.
     """
     if logger is None:
-        logger = setup_logger(__name__)
+        logger = setup_logger('src.data.data_preparation')
     cfg = split_config or SPLIT_CONFIG
 
     logger.info(f"Splitting dataset using config: {cfg}")

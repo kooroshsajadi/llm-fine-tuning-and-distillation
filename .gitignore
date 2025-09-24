@@ -2,9 +2,8 @@ dllmenv/
 my_model_cache/
 __pycache__/
 *.pyc
-data/
 .vscode/
-models/
 configs/
 .venv/
 logs/
+artifacts/

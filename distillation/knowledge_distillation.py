@@ -1,14 +1,12 @@
-import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import logging
 import os
 from pathlib import Path
 from transformers import Trainer, TrainingArguments
 from datasets import Dataset
-from src.core.model_loader import ModelLoader
-from src.utils.utils import save_model, generate_checksum, LogEpochLossCallback
-from src.data.data_preparation import load_kd_dataset, data_collator
+from model.model_loader import ModelLoader
+from utils.utils import save_model, generate_checksum, LogEpochLossCallback
+from data.data_preparation import load_kd_dataset, data_collator
 
 # Logging setup
 logging.basicConfig(
