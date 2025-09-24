@@ -15,7 +15,7 @@ Key highlights include dynamic adaptation to hardware (e.g., automatic QLoRA for
 
 ### 🔧 Flexible Model Support:
 
-Currently compatible with seq2seq models (e.g., T5 or MarianMT), aiming for compatibility with causal LM (e.g., GPT-2) and masked LM (e.g., BERT). Automatically loads and configures models via [ModelLoader](./src/core/model_loader.py), which handles device mapping ("auto" for CPU/GPU detection), quantization, and dtype selection (e.g., float16 for GPUs, bfloat16 for Intel CPUs like ARC GPUs).
+Currently compatible with causal (e.g., GPT or Llama) and seq2seq models (e.g., T5 or MarianMT), aiming for compatibility with masked LM (e.g., BERT). Automatically loads and configures models via [ModelLoader](./model/model_loader.py), which handles device mapping ("auto" for CPU/GPU detection), quantization, and dtype selection (e.g., float16 for GPUs, bfloat16 for Intel CPUs like ARC GPUs).
 
 ### 🧠 Advanced Fine-Tuning with QLoRA/LoRA:
 
