@@ -1,5 +1,5 @@
 import torch
-from src.core.model_loader import ModelLoader
+from model.model_loader import ModelLoader
 from src.data.data_preparation import TextDataset
 import torch.nn.functional as F
 # from transformers import AutoModelForCausalLM, AutoTokenizer
