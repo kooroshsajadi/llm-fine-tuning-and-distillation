@@ -25,8 +25,7 @@ class QLoRAFineTuner(FineTuner):
     DEFAULT_TARGET_MODULES = {
         "causal_lm": ["c_attn", "c_proj", "mlp.c_proj"],
         "masked_lm": ["query", "key", "value", "output.dense"],
-        # "masked_lm": ["q", "k", "v", "dense"],
-        "SEQ_2_SEQ_LM": ["self_attn.k", "self_attn.q", "self_attn.v", "self_attn.out", "encoder_attn.k",
+        "seq2seq_lm": ["self_attn.k", "self_attn.q", "self_attn.v", "self_attn.out", "encoder_attn.k",
                                        "encoder_attn.q", "encoder_attn.v", "encoder_attn.out", "fc1", "fc2"],
         "distilgpt2": ["c_attn", "c_proj", "c_fc", "c_proj"],
         "llama3": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
