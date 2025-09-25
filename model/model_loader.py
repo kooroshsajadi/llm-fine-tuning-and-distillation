@@ -46,7 +46,7 @@ class ModelLoader:
 
         cuda_capability = self._select_data_type(use_qlora=self.use_qlora)
 
-        # Configure QLoRA and BitStandBytes.
+        # Configure QLoRA and BitsAndBytes.
         bnb_config = None
         if self.use_qlora:
             if not self.use_cuda:
