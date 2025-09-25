@@ -130,7 +130,7 @@ class ModelLoader:
                 raise TypeError("lora_config must be a peft.LoraConfig object")
             self.model = prepare_model_for_kbit_training(
                 self.model,
-                use_gradient_checkpointing=True  # Could be a parameter
+                use_gradient_checkpointing=True
             )
             logger.info("Prepared model for QLoRA training with gradient checkpointing")
 
@@ -242,10 +242,6 @@ class ModelLoader:
             return True
         except ImportError:
             return False
-
-    def _validate_model_source(self, model_name: str) -> bool:
-        supported_models = ["gpt2", "bert-base-italian", "electra-base-italian", "t5"]
-        return any(model in model_name.lower() for model in supported_models) or Path(model_name).exists()
 
     def _format_count(self, n: int) -> str:
         # Human-friendly: 1.23M, 456.7M, 13.4B
