@@ -1,0 +1,12 @@
+bitsandbytes==0.48.1
+datasets==4.1.1
+evaluate==0.4.6
+intel_extension_for_pytorch==2.8.0
+nltk==3.9.2
+numpy==2.3.3
+peft==0.17.1
+psutil==7.1.0
+PyYAML==6.0.3
+torch==2.8.0
+tqdm==4.67.1
+transformers==4.57.0

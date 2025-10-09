@@ -313,7 +313,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/distilgpt2-qlora.yaml")
+    config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
@@ -336,9 +336,9 @@ def main():
     
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='models/fine_tuned_models/distilgpt2',
-        num_train_epochs=tuner_config.get('num_train_epochs', 3),
-        learning_rate=float(tuner_config.get('learning_rate', 1e-4)),
+        output_dir='models/fine_tuned_models/Meta-Llama-3-8B-Instruct',
+        num_train_epochs=tuner_config.get('num_train_epochs', 10),
+        learning_rate=float(tuner_config.get('learning_rate', 1e-5)),
         logging_steps=tuner_config.get('logging_steps', 10),
         save_strategy=tuner_config.get('save_strategy', 'epoch')
     )
