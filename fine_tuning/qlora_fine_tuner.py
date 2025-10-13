@@ -314,7 +314,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
+    config = utils.return_config("configs/fine_tuning/tiiuae-falcon-7b-Instruct.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
