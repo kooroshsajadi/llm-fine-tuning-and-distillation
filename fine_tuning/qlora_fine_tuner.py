@@ -29,7 +29,8 @@ class QLoRAFineTuner(FineTuner):
         "SEQ_2_SEQ_LM": ["self_attn.k", "self_attn.q", "self_attn.v", "self_attn.out", "encoder_attn.k",
                                        "encoder_attn.q", "encoder_attn.v", "encoder_attn.out", "fc1", "fc2"],
         "distilgpt2": ["c_attn", "c_proj", "c_fc", "c_proj"],
-        "llama3": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+        "llama3": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "falcon7binstruct": ["query_key_value", "dense", "mlp.dense_h_to_4h", "mlp.dense_4h_to_h"]
     }
 
     def __init__(
@@ -336,7 +337,7 @@ def main():
     
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='models/fine_tuned_models/Meta-Llama-3-8B-Instruct',
+        output_dir='artifacts/models/fine_tuned_models/falcon-7b-instruct', #Meta-Llama-3-8B-Instruct
         num_train_epochs=tuner_config.get('num_train_epochs', 10),
         learning_rate=float(tuner_config.get('learning_rate', 1e-5)),
         logging_steps=tuner_config.get('logging_steps', 10),
