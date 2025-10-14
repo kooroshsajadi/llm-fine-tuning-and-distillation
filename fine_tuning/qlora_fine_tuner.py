@@ -314,7 +314,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/tiiuae-falcon-7b-Instruct.yaml")
+    config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
@@ -337,7 +337,7 @@ def main():
     
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='artifacts/models/fine_tuned_models/falcon-7b-instruct', #Meta-Llama-3-8B-Instruct
+        output_dir='artifacts/models/fine_tuned_models/Meta-Llama-3-8B-Instruct', #falcon-7b-instruct
         num_train_epochs=tuner_config.get('num_train_epochs', 10),
         learning_rate=float(tuner_config.get('learning_rate', 1e-5)),
         logging_steps=tuner_config.get('logging_steps', 10),
