@@ -112,9 +112,9 @@ def inference(args):
 if __name__ == "__main__":
     config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
     args = {
-        "base_model_path": config["base_model"],
-        "adapter_path": Path(config['output_dir']) / "model",
-        "tokenizer_path": Path(config['output_dir']) / "tokenizer",
+        "base_model_path": config['fine_tuning']["base_model"],
+        "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
+        "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
         "dataset_path": "data/leggi_area_3_text",
         "max_length": 256,
         "batch_size": 8,
