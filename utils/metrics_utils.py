@@ -2,8 +2,8 @@ from evaluate import load
 import numpy as np
 import nltk
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
-from sacrebleu.metrics.chrf import CHRF  # For chrF; install if needed: pip install sacrebleu
-from nltk.translate.meteor_score import meteor_score  # For METEOR
+from sacrebleu.metrics.chrf import CHRF  # Install if needed: pip install sacrebleu
+from nltk.translate.meteor_score import meteor_score
 import torch
 
 
