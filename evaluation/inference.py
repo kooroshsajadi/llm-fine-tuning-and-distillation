@@ -8,6 +8,7 @@ from data.data_preparation import prepare_dataset_dict
 from utils import utils
 from utils.logging_utils import setup_logger
 from utils.metrics_utils import HFMetricHelper
+from model.model_loader import ModelLoader
 
 
 logger = setup_logger('evaluation.inference')
