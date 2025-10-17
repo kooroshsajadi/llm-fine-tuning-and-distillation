@@ -1,8 +1,9 @@
 import torch
 from pathlib import Path
-from transformers import (DataCollatorForLanguageModeling, Trainer,
-                          TrainingArguments, DataCollatorForSeq2Seq, Seq2SeqTrainer,
-                          Seq2SeqTrainingArguments)
+from transformers import (AutoTokenizer, AutoModelForSeq2SeqLM, DataCollatorForLanguageModeling, Seq2SeqTrainer,
+                          Seq2SeqTrainingArguments, DataCollatorForSeq2Seq, AutoModelForCausalLM, Trainer,
+                          TrainingArguments)
+from peft import PeftModel
 from data.data_preparation import prepare_dataset_dict
 from utils import utils
 from utils.logging_utils import setup_logger
@@ -20,36 +21,30 @@ def inference(args):
         args (dict): Dictionary containing base_model_path, adapter_path, tokenizer_path, dataset_path,
                      max_length, batch_size, generation_max_length, num_beams, and model_type.
     """
-    # Map model_type to match ModelLoader expectations
-    model_type_map = {
-        "causal": "causal_lm",
-        "seq2seq": "seq2seq_lm"
-    }
-    loader_model_type = model_type_map.get(args.get("model_type", "seq2seq"), "seq2seq_lm")
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(args["tokenizer_path"])
+    logger.info(f"Loaded tokenizer from {args['tokenizer_path']}")
 
-    # Load model and tokenizer using ModelLoader
-    model_loader = ModelLoader(
-        model_name=args["base_model_path"],
-        model_type=loader_model_type,
-        adapter_path=str(args["adapter_path"]),
-        use_qlora=args.get("use_qlora", False),  # Assuming from config if needed; default False for inference
-        device_map="auto",
-        max_length=args["max_length"],
-        train_mode=False
-    )
-    model = model_loader.model
-    tokenizer = model_loader.tokenizer
-    logger.info(f"Loaded model from {args['base_model_path']} with adapters from {args['adapter_path']} using ModelLoader")
+    # Load base model and LoRA adapters
+    if args.get("model_type", "seq2seq") == "causal":
+        base_model = AutoModelForCausalLM.from_pretrained(args["base_model_path"])
+    else:
+        base_model = AutoModelForSeq2SeqLM.from_pretrained(args["base_model_path"])
+    model = PeftModel.from_pretrained(base_model, args["adapter_path"])
+    logger.info(f"Loaded model from {args['base_model_path']} with adapters from {args['adapter_path']}")
 
-    # Log model profile
-    model_loader._log_model_profile("Inference model loaded")
+    # Set device
+    device = torch.device("xpu" if torch.xpu.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+    model.eval()
+    logger.info(f"Model moved to {device}")
 
     # Prepare test dataset
     dataset_dict = prepare_dataset_dict(
         input_path=args["dataset_path"],
         tokenizer=tokenizer,
         max_length=args["max_length"],
-        model_type=loader_model_type,  # Use consistent model_type
+        model_type=args.get("model_type", "seq2seq"),
         logger=logger
     )
     tokenized_test = dataset_dict["test"]
@@ -65,8 +60,7 @@ def inference(args):
             generation_num_beams=args["num_beams"],
             do_predict=True,
             report_to="none",
-            fp16=model_loader.use_fp16,
-            bf16=model_loader.use_bf16,
+            fp16=(device.type == "cuda"),  # Enable mixed precision for CUDA
             remove_unused_columns=False
         )
     else:
@@ -77,9 +71,6 @@ def inference(args):
             generation_max_length=args["generation_max_length"],
             generation_num_beams=args["num_beams"],
             do_predict=True,
-            fp16=model_loader.use_fp16,
-            bf16=model_loader.use_bf16,
-            remove_unused_columns=False
         )
 
     metric_helper = HFMetricHelper(tokenizer=tokenizer,
@@ -91,6 +82,7 @@ def inference(args):
             model=model,
             args=training_args,
             tokenizer=tokenizer,
+            # processing_class=tokenizer,  # Updated to avoid FutureWarning
             data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
             compute_metrics=lambda eval_pred: metric_helper.compute(eval_pred, compute_ppl=True)
         )
@@ -98,15 +90,15 @@ def inference(args):
         trainer = Seq2SeqTrainer(
             model=model,
             args=training_args,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,  # Updated to avoid FutureWarning
             data_collator=DataCollatorForSeq2Seq(tokenizer, model=model),
-            compute_metrics=metric_helper.compute
-        )
+        compute_metrics=metric_helper.compute
+    )
 
     # Generate predictions and compute metrics
     logger.info("Starting inference...")
     predictions = trainer.predict(tokenized_test)
-    metrics = predictions.metrics
+    metrics = metric_helper.compute(predictions, compute_ppl=True, input_ids=predictions.label_ids)
     logger.info(f"Evaluation Metrics: {metrics}")
 
     # Save predictions
@@ -123,14 +115,13 @@ if __name__ == "__main__":
     args = {
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
-        "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",  # Kept for reference, but not used
+        "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
         "dataset_path": "data/leggi_area_3_text",
         "max_length": 256,
         "batch_size": 8,
         "generation_max_length": 256,
         "num_beams": 4,
-        "model_type": "causal",
-        "use_qlora": True
+        "model_type": "causal"
     }
 
     inference(args)
