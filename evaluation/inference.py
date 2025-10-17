@@ -1,24 +1,29 @@
 import torch
 from pathlib import Path
-from transformers import (DataCollatorForLanguageModeling, Trainer,
-                          TrainingArguments, DataCollatorForSeq2Seq, Seq2SeqTrainer,
-                          Seq2SeqTrainingArguments)
+from transformers import (
+    DataCollatorForLanguageModeling,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForSeq2Seq,
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments
+)
 from data.data_preparation import prepare_dataset_dict
 from utils import utils
 from utils.logging_utils import setup_logger
 from utils.metrics_utils import HFMetricHelper
 from model.model_loader import ModelLoader
 
-
 logger = setup_logger('evaluation.inference')
 
 def inference(args):
     """
-    Perform inference on a fine-tuned seq2seq model with LoRA adapters and compute ROUGE, BLEU, and BERTScore metrics.
+    Perform inference on a fine-tuned model with LoRA adapters and compute ROUGE, BLEU, and BERTScore metrics.
 
     Args:
         args (dict): Dictionary containing base_model_path, adapter_path, tokenizer_path, dataset_path,
-                     max_length, batch_size, generation_max_length, num_beams, and model_type.
+                     max_length, batch_size, generation_max_length, num_beams, model_type,
+                     offload_to_disk, and offload_dir.
     """
     # Map model_type to match ModelLoader expectations
     model_type_map = {
@@ -27,19 +32,25 @@ def inference(args):
     }
     loader_model_type = model_type_map.get(args.get("model_type", "seq2seq"), "seq2seq_lm")
 
+    # Set use_qlora based on offload_to_disk
+    use_qlora = not args.get("offload_to_disk", True) and torch.cuda.is_available()
+
     # Load model and tokenizer using ModelLoader
     model_loader = ModelLoader(
         model_name=args["base_model_path"],
         model_type=loader_model_type,
         adapter_path=str(args["adapter_path"]),
-        use_qlora=args.get("use_qlora", False),  # Assuming from config if needed; default False for inference
+        use_qlora=use_qlora,
         device_map="auto",
         max_length=args["max_length"],
-        train_mode=False
+        train_mode=False,
+        offload_to_disk=args.get("offload_to_disk", True),
+        offload_dir=args.get("offload_dir", "./offload_dir")
     )
     model = model_loader.model
     tokenizer = model_loader.tokenizer
     logger.info(f"Loaded model from {args['base_model_path']} with adapters from {args['adapter_path']} using ModelLoader")
+    logger.info(f"QLoRA: {use_qlora}, Disk offloading: {model_loader.offload_to_disk} ({model_loader.offload_dir if model_loader.offload_to_disk else 'N/A'})")
 
     # Log model profile
     model_loader._log_model_profile("Inference model loaded")
@@ -49,7 +60,7 @@ def inference(args):
         input_path=args["dataset_path"],
         tokenizer=tokenizer,
         max_length=args["max_length"],
-        model_type=loader_model_type,  # Use consistent model_type
+        model_type=loader_model_type,
         logger=logger
     )
     tokenized_test = dataset_dict["test"]
@@ -82,9 +93,11 @@ def inference(args):
             remove_unused_columns=False
         )
 
-    metric_helper = HFMetricHelper(tokenizer=tokenizer,
-                                   bertscore_model_type="bert-base-multilingual-cased",
-                                   model=model)
+    metric_helper = HFMetricHelper(
+        tokenizer=tokenizer,
+        bertscore_model_type="bert-base-multilingual-cased",
+        model=model
+    )
 
     if args.get("model_type", "seq2seq") == "causal":
         trainer = Trainer(
@@ -123,14 +136,16 @@ if __name__ == "__main__":
     args = {
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
-        "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",  # Kept for reference, but not used
+        "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
         "dataset_path": "data/leggi_area_3_text",
         "max_length": 256,
         "batch_size": 8,
         "generation_max_length": 256,
         "num_beams": 4,
         "model_type": "causal",
-        "use_qlora": True
+        "offload_to_disk": True,  # Default to disk offloading
+        "offload_dir": "./artifacts/offload_dir",  # Default offload directory
+        "execution_device": None
     }
 
     inference(args)
