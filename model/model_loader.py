@@ -31,8 +31,8 @@ class ModelLoader:
         device_map: str = "auto",
         max_length: int = 128,
         train_mode: bool = False,
-        offload_to_disk: bool = False,
-        offload_dir: str | None = None,
+        offload_to_disk: Optional[bool] = False,
+        offload_dir: Optional[str] = None,
         execution_device: Optional[torch.device] = None,
         enable_gradient_checkpointing: Optional[bool] = False
     ):

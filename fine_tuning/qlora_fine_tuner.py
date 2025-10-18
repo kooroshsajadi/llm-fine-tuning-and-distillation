@@ -1,6 +1,7 @@
 import logging
 import os
 import torch
+from typing import Optional
 from pathlib import Path
 from peft import LoraConfig
 from model.model_loader import ModelLoader
@@ -44,6 +45,9 @@ class QLoRAFineTuner(FineTuner):
         use_qlora: bool = True,
         device_map: str = "auto",
         max_length: int = 128,
+        offload_to_disk: Optional[bool] = False,
+        offload_dir: Optional[str] = None,
+        enable_gradient_checkpointing: Optional[bool] = False,
         logger: logging.Logger = logger
     ):
         """
@@ -93,6 +97,9 @@ class QLoRAFineTuner(FineTuner):
             use_qlora=use_qlora,
             device_map=device_map,
             max_length=self.max_length,
+            offload_to_disk=offload_to_disk,
+            offload_dir=offload_dir,
+            enable_gradient_checkpointing=enable_gradient_checkpointing,
             train_mode=True
         )
         self.model = self.model_loader.model
@@ -314,7 +321,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
+    config = utils.return_config("configs/fine_tuning/tiiuae-falcon-7b-Instruct.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
@@ -327,6 +334,9 @@ def main():
         use_qlora=tuner_config.get('use_qlora', False),
         device_map=tuner_config.get('device_map', 'auto'),
         max_length=tuner_config.get('max_length', 128),
+        offload_to_disk=tuner_config.get('offload_to_disk', False),
+        offload_dir=tuner_config.get('offload_dir', None),
+        enable_gradient_checkpointing=tuner_config.get('enable_gradient_checkpointing', False),
         logger=logger
     )
 
@@ -337,7 +347,7 @@ def main():
     
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='artifacts/models/fine_tuned_models/Meta-Llama-3-8B-Instruct', #falcon-7b-instruct
+        output_dir='artifacts/models/fine_tuned_models/falcon-7b-instruct-xpu', #meta-Llama-3-8B-Instruct
         num_train_epochs=tuner_config.get('num_train_epochs', 10),
         learning_rate=float(tuner_config.get('learning_rate', 1e-5)),
         logging_steps=tuner_config.get('logging_steps', 10),

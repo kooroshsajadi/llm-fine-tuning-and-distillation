@@ -137,14 +137,14 @@ if __name__ == "__main__":
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
         "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
-        "dataset_path": "data/leggi_area_3_text",
+        "dataset_path": Path(config['datasets']['leggi_area_3_text']),
         "max_length": 256,
         "batch_size": 8,
         "generation_max_length": 256,
         "num_beams": 4,
         "model_type": "causal",
         "offload_to_disk": True,  # Default to disk offloading
-        "offload_dir": "./artifacts/offload_dir",  # Default offload directory
+        "offload_dir": Path(config['fine_tuning']['offload_dir']),  # Default offload directory
         "execution_device": None
     }
 
