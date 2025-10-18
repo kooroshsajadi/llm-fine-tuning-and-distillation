@@ -33,7 +33,8 @@ class ModelLoader:
         train_mode: bool = False,
         offload_to_disk: bool = False,
         offload_dir: str | None = None,
-        execution_device: Optional[torch.device] = None
+        execution_device: Optional[torch.device] = None,
+        enable_gradient_checkpointing: Optional[bool] = False
     ):
         self.model_name = model_name
         self.model_type = model_type
@@ -186,6 +187,9 @@ class ModelLoader:
         except Exception as e:
             logger.error(f"Unexpected error loading tokenizer for {model_name}: {str(e)}")
             raise
+
+        if enable_gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
 
         self.model.train(self.train_mode)
 
