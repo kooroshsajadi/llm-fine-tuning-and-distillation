@@ -94,7 +94,7 @@ class ModelLoader:
                 "quantization_config": bnb_config,
                 "device_map": device_map if not bnb_config and not self.offload_to_disk else "auto",
                 "output_hidden_states": False,
-                "torch_dtype": self.dtype if not bnb_config else None,
+                "dtype": self.dtype if not bnb_config else None,
                 "trust_remote_code": False
             }
 
