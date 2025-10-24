@@ -45,8 +45,10 @@ class QLoRAFineTuner(FineTuner):
         use_qlora: bool = True,
         device_map: str = "auto",
         max_length: int = 128,
-        offload_to_disk: Optional[bool] = False,
-        offload_dir: Optional[str] = None,
+        # offload_to_disk: Optional[bool] = False,
+        # offload_dir: Optional[str] = None,
+        # trust_remote_code: Optional[bool] = False,
+        # offload_buffers: Optional[bool] = False,
         enable_gradient_checkpointing: Optional[bool] = False,
         logger: logging.Logger = logger
     ):
@@ -97,8 +99,10 @@ class QLoRAFineTuner(FineTuner):
             use_qlora=use_qlora,
             device_map=device_map,
             max_length=self.max_length,
-            offload_to_disk=offload_to_disk,
-            offload_dir=offload_dir,
+            # offload_to_disk=offload_to_disk,
+            # offload_dir=offload_dir,
+            # trust_remote_code=trust_remote_code,
+            # offload_buffers=offload_buffers,
             enable_gradient_checkpointing=enable_gradient_checkpointing,
             train_mode=True
         )
@@ -321,7 +325,7 @@ class QLoRAFineTuner(FineTuner):
         self.logger.info(f"Model and tokenizer saved to {output_dir}")
 
 def main():
-    config = utils.return_config("configs/fine_tuning/tiiuae-falcon-7b-Instruct.yaml")
+    config = utils.return_config("configs/fine_tuning/distilgpt2-qlora.yaml")
 
     tuner_config = config.get('fine_tuning', {})
     tuner = QLoRAFineTuner(
@@ -334,8 +338,10 @@ def main():
         use_qlora=tuner_config.get('use_qlora', False),
         device_map=tuner_config.get('device_map', 'auto'),
         max_length=tuner_config.get('max_length', 128),
-        offload_to_disk=tuner_config.get('offload_to_disk', False),
-        offload_dir=tuner_config.get('offload_dir', None),
+        # offload_to_disk=tuner_config.get('offload_to_disk', False),
+        # offload_dir=tuner_config.get('offload_dir', None),
+        # trust_remote_code=tuner_config.get('trust_remote_code', False),
+        # offload_buffers=tuner_config.get('offload_buffers', False),
         enable_gradient_checkpointing=tuner_config.get('enable_gradient_checkpointing', False),
         logger=logger
     )
@@ -347,7 +353,7 @@ def main():
     
     tuner.train(
         dataset_dict=dataset_dict,
-        output_dir='artifacts/models/fine_tuned_models/falcon-7b-instruct-xpu', #meta-Llama-3-8B-Instruct
+        output_dir=tuner_config.get('output_dir', None),
         num_train_epochs=tuner_config.get('num_train_epochs', 10),
         learning_rate=float(tuner_config.get('learning_rate', 1e-5)),
         logging_steps=tuner_config.get('logging_steps', 10),

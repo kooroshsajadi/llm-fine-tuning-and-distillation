@@ -33,7 +33,7 @@ def inference(args):
     loader_model_type = model_type_map.get(args.get("model_type", "seq2seq"), "seq2seq_lm")
 
     # Set use_qlora based on offload_to_disk
-    use_qlora = not args.get("offload_to_disk", True) and torch.cuda.is_available()
+    use_qlora = not args.get("offload_to_disk", False) and torch.cuda.is_available()
 
     # Load model and tokenizer using ModelLoader
     model_loader = ModelLoader(
@@ -44,13 +44,14 @@ def inference(args):
         device_map="auto",
         max_length=args["max_length"],
         train_mode=False,
-        offload_to_disk=args.get("offload_to_disk", True),
-        offload_dir=args.get("offload_dir", "./offload_dir")
+        offload_buffers=args.get("offload_buffers", False),
+        # offload_to_disk=args.get("offload_to_disk", False),
+        # offload_dir=args.get("offload_dir", "./offload_dir")
     )
     model = model_loader.model
     tokenizer = model_loader.tokenizer
     logger.info(f"Loaded model from {args['base_model_path']} with adapters from {args['adapter_path']} using ModelLoader")
-    logger.info(f"QLoRA: {use_qlora}, Disk offloading: {model_loader.offload_to_disk} ({model_loader.offload_dir if model_loader.offload_to_disk else 'N/A'})")
+    # logger.info(f"QLoRA: {use_qlora}, Disk offloading: {model_loader.offload_to_disk} ({model_loader.offload_dir if model_loader.offload_to_disk else 'N/A'})")
 
     # Log model profile
     model_loader._log_model_profile("Inference model loaded")
@@ -71,9 +72,9 @@ def inference(args):
         training_args = TrainingArguments(
             output_dir="./tmp_inference",
             per_device_eval_batch_size=args["batch_size"],
-            predict_with_generate=True,
-            generation_max_length=args["generation_max_length"],
-            generation_num_beams=args["num_beams"],
+            # predict_with_generate=True,
+            # generation_max_length=args["generation_max_length"],
+            # generation_num_beams=args["num_beams"],
             do_predict=True,
             report_to="none",
             fp16=model_loader.use_fp16,
@@ -132,18 +133,19 @@ def inference(args):
     logger.info(f"Predictions saved to {output_path}")
 
 if __name__ == "__main__":
-    config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
+    config = utils.return_config("configs/fine_tuning/distilgpt2-qlora.yaml")
     args = {
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
         "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
         "dataset_path": Path(config['datasets']['leggi_area_3_text']),
-        "max_length": 256,
-        "batch_size": 8,
-        "generation_max_length": 256,
+        "max_length": 1024,
+        "batch_size": 1,
+        "generation_max_length": 1024,
         "num_beams": 4,
         "model_type": "causal",
-        "offload_to_disk": True,  # Default to disk offloading
+        "offload_buffers": config['fine_tuning']["offload_buffers"],
+        "offload_to_disk": config['fine_tuning']["offload_to_disk"],
         "offload_dir": Path(config['fine_tuning']['offload_dir']),  # Default offload directory
         "execution_device": None
     }

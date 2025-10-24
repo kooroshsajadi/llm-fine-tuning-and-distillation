@@ -67,7 +67,7 @@ def prepare_tokenized_dataset(
 
     logger.info(f"Preparing dataset from {input_path} for {model_type}")
     if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Input file {input_path} does not exist")
+        raise FileNotFoundError(f"Input directory {input_path} does not exist")
     try:
         prompt_dataset = TextDataset(input_path, transform=None)
         texts = prompt_dataset.texts

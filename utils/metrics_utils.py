@@ -5,6 +5,9 @@ from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 from sacrebleu.metrics.chrf import CHRF  # Install if needed: pip install sacrebleu
 from nltk.translate.meteor_score import meteor_score
 import torch
+import absl
+import rouge_score
+import bert_score
 
 
 class HFMetricHelper:
