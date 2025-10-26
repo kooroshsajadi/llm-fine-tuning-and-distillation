@@ -2,7 +2,7 @@ from evaluate import load
 import numpy as np
 import nltk
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
-from sacrebleu.metrics.chrf import CHRF  # Install if needed: pip install sacrebleu
+from sacrebleu.metrics.chrf import CHRF  # pip install sacrebleu
 from nltk.translate.meteor_score import meteor_score
 import torch
 
@@ -24,6 +24,7 @@ class HFMetricHelper:
         self.bertscore = load("bertscore")  # Load BERTScore metric from the `evaluate` library
         self.bertscore_model_type = bertscore_model_type
         nltk.download('punkt', quiet=True)  # Download NLTK punkt tokenizer for sentence splitting
+        nltk.download('punkt_tab', quiet=True)
         self.model = model  # Optional: Pretrained model for perplexity computation
         self.perplexity = None  # Placeholder for PPL (not used directly)
         self.accuracy = load("accuracy")  # Load accuracy metric for token-level evaluation
@@ -188,41 +189,52 @@ class HFMetricHelper:
     def compute_meteor_and_chrf(self, predictions, references):
         """
         Compute METEOR and chrF scores for advanced text generation evaluation.
-
-        - METEOR (Metric for Evaluation of Translation with Explicit ORdering): Measures text similarity
-          by considering unigram matches, stemming, and synonyms (via WordNet for Italian). It balances
-          precision, recall, and word order, making it robust for translation and generation tasks.
-        - chrF (Character n-gram F-score): A character-based metric that evaluates n-gram overlap at the
-          character level, effective for morphologically rich languages like Italian where word-level
-          metrics may miss nuances.
-
+    
         Args:
-            predictions (list): List of predicted text strings.
-            references (list): List of reference text strings.
-
+            predictions (list of str): List of predicted text strings.
+            references (list of str): List of reference text strings.
+    
         Returns:
-            dict: METEOR and chrF scores as percentages (0-100).
+            dict: METEOR and chrF scores as percentages (0-100), keys 'meteor' and 'chrf'.
+    
+        METEOR (Metric for Evaluation of Translation with Explicit ORdering) measures text similarity by considering unigram matches,
+        stemming, and synonyms (when resources are available). It balances precision, recall, and word order, making it robust for
+        translation and generation tasks, especially in Italian. METEOR expects both references and predictions to be tokenized as lists of tokens.
+    
+        chrF (Character n-gram F-score) is a character-based metric effective for morphologically rich languages, evaluating n-gram overlap
+        at the character level. It is robust to variations in word structure and does not require explicit tokenization.
+    
+        Notes:
+            - METEOR score is computed using NLTK and requires 'wordnet' and 'omw-1.4' resources for synonym support in Italian.
+            - chrF score uses sacrebleu.metrics.chrf and expects untokenized input (plain strings).
+    
+        Example:
+            >>> predictions = ["GABINETTO", "Questa è una prova"]
+            >>> references = ["GABINETTO", "Questa è una prova"]
+            >>> scores = self.compute_meteor_and_chrf(predictions, references)
+            >>> print(scores)  # {'meteor': ..., 'chrf': ...}
         """
         if self.meteor is None:
             nltk.download('wordnet', quiet=True)
             nltk.download('omw-1.4', quiet=True)  # For Italian WordNet support
             self.meteor = True  # Flag to avoid redundant downloads
-
-        # Tokenize predictions and references for METEOR
+    
+        # Tokenize predictions and references for METEOR (list of tokens for each string)
         tokenized_preds = [nltk.word_tokenize(p, language='italian') for p in predictions]
-        tokenized_refs = [[nltk.word_tokenize(r, language='italian')] for r in references]
-
-        # Compute METEOR score for each prediction-reference pair
-        meteor_scores = [meteor_score(ref[0], pred) for pred, ref in zip(tokenized_preds, tokenized_refs)]
+        tokenized_refs = [nltk.word_tokenize(r, language='italian') for r in references]
+    
+        # Compute METEOR score for each prediction-reference pair (reference must be wrapped in a list of tokens)
+        meteor_scores = [meteor_score([ref], pred) for pred, ref in zip(tokenized_preds, tokenized_refs)]
         meteor_avg = np.mean(meteor_scores)
-
-        # Compute chrF score using sacrebleu (expects tokenized input for consistency)
-        chrf_score = self.chrf.corpus_score(tokenized_preds, [[t[0]] for t in tokenized_refs]).score / 100  # Normalize to [0,1]
-
+    
+        # chrF expects original, untokenized strings
+        chrf_score = self.chrf.corpus_score(predictions, [references]).score / 100  # Normalize to [0,1]
+    
         return {
             "meteor": round(meteor_avg * 100, 4),
             "chrf": round(chrf_score * 100, 4)
         }
+
 
     def compute(self, eval_pred, compute_ppl=False, input_ids=None):
         """
