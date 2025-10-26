@@ -67,7 +67,7 @@ def prepare_tokenized_dataset(
 
     logger.info(f"Preparing dataset from {input_path} for {model_type}")
     if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Input file {input_path} does not exist")
+        raise FileNotFoundError(f"Input directory {input_path} does not exist")
     try:
         prompt_dataset = TextDataset(input_path, transform=None)
         texts = prompt_dataset.texts
@@ -188,7 +188,7 @@ def prepare_dataset_dict(
     Always returns reproducible splits given the same SPLIT_CONFIG and input.
     """
     if logger is None:
-        logger = setup_logger('src.data.data_preparation')
+        logger = setup_logger('data.data_preparation')
     cfg = split_config or SPLIT_CONFIG
 
     logger.info(f"Splitting dataset using config: {cfg}")
