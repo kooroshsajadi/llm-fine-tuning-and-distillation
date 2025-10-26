@@ -71,9 +71,9 @@ def inference(args):
         training_args = TrainingArguments(
             output_dir="./tmp_inference",
             per_device_eval_batch_size=args["batch_size"],
-            predict_with_generate=True,
-            generation_max_length=args["generation_max_length"],
-            generation_num_beams=args["num_beams"],
+            # predict_with_generate=True,
+            # generation_max_length=args["generation_max_length"],
+            # generation_num_beams=args["num_beams"],
             do_predict=True,
             report_to="none",
             fp16=model_loader.use_fp16,
@@ -137,13 +137,13 @@ if __name__ == "__main__":
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
         "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
-        "dataset_path": "data/leggi_area_3_text",
+        "dataset_path": Path(config['datasets']['leggi_area_3_text']),
         "max_length": 256,
         "batch_size": 8,
         "generation_max_length": 256,
         "num_beams": 4,
         "model_type": "causal",
-        "offload_to_disk": True,  # Default to disk offloading
+        "offload_to_disk": False,  # Default to disk offloading
         "offload_dir": "./artifacts/offload_dir",  # Default offload directory
         "execution_device": None
     }
