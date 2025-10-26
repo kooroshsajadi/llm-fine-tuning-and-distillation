@@ -216,11 +216,11 @@ class HFMetricHelper:
         tokenized_refs = [[nltk.word_tokenize(r, language='italian')] for r in references]
 
         # Compute METEOR score for each prediction-reference pair
-        meteor_scores = [meteor_score(ref[0], pred) for pred, ref in zip(tokenized_preds, tokenized_refs)]
+        meteor_scores = [meteor_score(ref, pred) for pred, ref in zip(tokenized_preds, tokenized_refs)]
         meteor_avg = np.mean(meteor_scores)
 
         # Compute chrF score using sacrebleu (expects tokenized input for consistency)
-        chrf_score = self.chrf.corpus_score(tokenized_preds, [[t[0]] for t in tokenized_refs]).score / 100  # Normalize to [0,1]
+        chrf_score = self.chrf.corpus_score(predictions, [[r] for r in references]).score / 100
 
         return {
             "meteor": round(meteor_avg * 100, 4),

@@ -13,6 +13,7 @@ from utils import utils
 from utils.logging_utils import setup_logger
 from utils.metrics_utils import HFMetricHelper
 from model.model_loader import ModelLoader
+import numpy as np
 
 logger = setup_logger('evaluation.inference')
 
@@ -65,13 +66,14 @@ def inference(args):
         logger=logger
     )
     tokenized_test = dataset_dict["test"]
+    tokenized_test = tokenized_test.select(range(20))
     logger.info(f"Loaded test dataset with {len(tokenized_test)} examples")
 
     # Setup trainer
     if args.get("model_type", "seq2seq") == "causal":
         training_args = TrainingArguments(
             output_dir="./tmp_inference",
-            per_device_eval_batch_size=args["batch_size"],
+            per_device_eval_batch_size=args["per_device_eval_batch_size"],
             # predict_with_generate=True,
             # generation_max_length=args["generation_max_length"],
             # generation_num_beams=args["num_beams"],
@@ -84,7 +86,7 @@ def inference(args):
     else:
         training_args = Seq2SeqTrainingArguments(
             output_dir="./tmp_inference",
-            per_device_eval_batch_size=args["batch_size"],
+            per_device_eval_batch_size=args["per_device_eval_batch_size"],
             predict_with_generate=True,
             generation_max_length=args["generation_max_length"],
             generation_num_beams=args["num_beams"],
@@ -104,7 +106,7 @@ def inference(args):
         trainer = Trainer(
             model=model,
             args=training_args,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
             compute_metrics=lambda eval_pred: metric_helper.compute(eval_pred, compute_ppl=True)
         )
@@ -112,7 +114,7 @@ def inference(args):
         trainer = Seq2SeqTrainer(
             model=model,
             args=training_args,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             data_collator=DataCollatorForSeq2Seq(tokenizer, model=model),
             compute_metrics=metric_helper.compute
         )
@@ -124,7 +126,12 @@ def inference(args):
     logger.info(f"Evaluation Metrics: {metrics}")
 
     # Save predictions
-    decoded_preds = tokenizer.batch_decode(predictions.predictions, skip_special_tokens=True)
+    if len(predictions.predictions.shape) == 3:
+        pred_ids = np.argmax(predictions.predictions, axis=-1)
+    else:
+        pred_ids = predictions.predictions
+
+    decoded_preds = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
     output_path = Path("data/predictions.txt")
     output_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -133,14 +140,14 @@ def inference(args):
     logger.info(f"Predictions saved to {output_path}")
 
 if __name__ == "__main__":
-    config = utils.return_config("configs/fine_tuning/distilgpt2-qlora.yaml")
+    config = utils.return_config("configs/fine_tuning/tiiuae-falcon-7b-Instruct.yaml")
     args = {
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
         "tokenizer_path": Path(config['fine_tuning']['output_dir']) / "tokenizer",
         "dataset_path": Path(config['datasets']['leggi_area_3_text']),
         "max_length": 1024,
-        "batch_size": 1,
+        "per_device_eval_batch_size": config['fine_tuning']["per_device_eval_batch_size"],
         "generation_max_length": 1024,
         "num_beams": 4,
         "model_type": "causal",
