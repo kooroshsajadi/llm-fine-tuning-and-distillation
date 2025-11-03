@@ -66,7 +66,7 @@ def inference(args):
         logger=logger
     )
     tokenized_test = dataset_dict["test"]
-    tokenized_test = tokenized_test.select(range(20))
+    tokenized_test = tokenized_test.select(range(10)) # Comment this for use of the complete dataset.
     logger.info(f"Loaded test dataset with {len(tokenized_test)} examples")
 
     # Setup trainer
@@ -140,7 +140,7 @@ def inference(args):
     logger.info(f"Predictions saved to {output_path}")
 
 if __name__ == "__main__":
-    config = utils.return_config("configs/fine_tuning/tiiuae-falcon-7b-Instruct.yaml")
+    config = utils.return_config("configs/fine_tuning/Meta-Llama-3-8B-Instruct.yaml")
     args = {
         "base_model_path": config['fine_tuning']["base_model"],
         "adapter_path": Path(config['fine_tuning']['output_dir']) / "model",
