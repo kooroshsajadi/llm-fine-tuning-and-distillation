@@ -104,7 +104,7 @@ def inference(args):
         trainer = Trainer(
             model=model,
             args=training_args,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             data_collator=DataCollatorForLanguageModeling(tokenizer, mlm=False),
             compute_metrics=lambda eval_pred: metric_helper.compute(eval_pred, compute_ppl=True)
         )
@@ -112,7 +112,7 @@ def inference(args):
         trainer = Seq2SeqTrainer(
             model=model,
             args=training_args,
-            tokenizer=tokenizer,
+            processing_class=tokenizer,
             data_collator=DataCollatorForSeq2Seq(tokenizer, model=model),
             compute_metrics=metric_helper.compute
         )
